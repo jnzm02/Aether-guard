@@ -32,10 +32,9 @@ from typing import Any
 import anthropic
 import httpx
 from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.responses import JSONResponse
 
 from prompt import SYSTEM_PROMPT, build_user_prompt
-from remediation import execute_action, RemediationResult
+from remediation import execute_action
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Logging
@@ -149,8 +148,8 @@ def _parse_and_validate(raw: str) -> dict[str, Any]:
     if "```" in raw:
         lines = raw.splitlines()
         raw = "\n".join(
-            l for l in lines
-            if not l.strip().startswith("```")
+            line for line in lines
+            if not line.strip().startswith("```")
         )
 
     try:
@@ -501,7 +500,6 @@ Output ONLY the Markdown document — no preamble, no code fences.\
 def _build_pm_prompt(incident_analyses: list[dict]) -> str:
     """Serialize incident analyses into a structured prompt for PM generation."""
     first  = incident_analyses[0]
-    last   = incident_analyses[-1]
     labels = first.get("alert_labels", {})
 
     metric_lines = []

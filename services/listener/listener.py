@@ -24,7 +24,6 @@ from uuid import uuid4
 import docker
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Logging

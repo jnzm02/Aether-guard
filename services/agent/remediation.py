@@ -212,7 +212,7 @@ def _scale(container_name: str, analysis: dict) -> RemediationResult:
         replica_name = f"{container_name}-scale-{int(time.time())}"
 
         # Expose on a random port to avoid bind conflicts.
-        new_container = _client.containers.run(
+        _client.containers.run(
             image,
             name=replica_name,
             detach=True,
@@ -282,7 +282,7 @@ def _rollback(container_name: str, analysis: dict) -> RemediationResult:
         container.stop(timeout=15)
         container.remove()
 
-        new_container = _client.containers.run(
+        _client.containers.run(
             rollback_image,
             name=container_name,
             detach=True,

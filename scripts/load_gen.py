@@ -19,13 +19,10 @@ import argparse
 import random
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Optional
 
 import urllib.request
 import urllib.error
-import json
 
 BASE_URL = "http://localhost:8080"
 
