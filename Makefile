@@ -41,11 +41,15 @@ test: ## Run unit tests
 
 # ── Docker Compose ────────────────────────────────────────────────────────────
 
-docker-up: ## Build image and start all Phase 1 services
+docker-up: ## Build image and start all services (including Grafana)
 	cd $(INFRA_DIR) && docker compose up --build -d
 	@echo "✅  Services running"
 	@echo "   target-service : http://localhost:8080"
 	@echo "   prometheus     : http://localhost:9090"
+	@echo "   alertmanager   : http://localhost:9093"
+	@echo "   listener       : http://localhost:8081"
+	@echo "   agent          : http://localhost:8082"
+	@echo "   grafana        : http://localhost:3001  (admin / aether-guard)"
 
 docker-down: ## Stop and remove all Phase 1 containers
 	cd $(INFRA_DIR) && docker compose down -v
@@ -90,6 +94,17 @@ metrics: ## Print current Prometheus metrics from target-service
 
 health: ## Check /health endpoint
 	@curl -s "http://localhost:8080/health" | python3 -m json.tool
+
+health-check: ## Check health of all services
+	@echo "target-service:"; curl -sf http://localhost:8080/health | python3 -m json.tool
+	@echo "listener:";       curl -sf http://localhost:8081/health | python3 -m json.tool
+	@echo "agent:";          curl -sf http://localhost:8082/health | python3 -m json.tool
+	@echo "prometheus:";     curl -sf http://localhost:9090/-/healthy && echo OK
+	@echo "alertmanager:";   curl -sf http://localhost:9093/-/healthy && echo OK
+	@echo "grafana:";        curl -sf http://localhost:3001/api/health | python3 -m json.tool
+
+grafana-open: ## Open Grafana dashboard in the browser
+	open http://localhost:3001/d/aether-guard-slo
 
 # ── Phase 2: Alerting & Listener ─────────────────────────────────────────────
 

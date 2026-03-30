@@ -152,6 +152,7 @@ make health-check   # checks all /health endpoints
 
 | Service | URL |
 |---------|-----|
+| **Grafana** | http://localhost:3001 *(admin / aether-guard)* |
 | Prometheus | http://localhost:9090 |
 | Alertmanager | http://localhost:9093 |
 | Alert Listener | http://localhost:8081/docs |
@@ -305,7 +306,7 @@ Post-mortems are written to `postmortems/YYYYMMDD-HHMMSS-{AlertName}.md`.
 | Layer | Technology |
 |-------|-----------|
 | Monitored service | Go 1.21, `prometheus/client_golang`, `uber/zap` |
-| Metrics & alerting | Prometheus 2.48, Alertmanager 0.26 |
+| Metrics & alerting | Prometheus 2.48, Alertmanager 0.26, **Grafana 10.3** |
 | Alert enrichment | Python 3.11, FastAPI, Docker SDK |
 | AI RCA engine | Anthropic Claude (Sonnet), structured JSON output |
 | Remediation | Docker SDK (`docker restart`, `docker update`) |
