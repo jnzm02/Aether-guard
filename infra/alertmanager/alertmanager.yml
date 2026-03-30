@@ -1,0 +1,64 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Alertmanager Configuration — Aether-Guard Phase 2
+#
+# Routing tree:
+#   All alerts → aether-guard-listener (Python webhook)
+#
+#   critical → group_wait=5s, repeat_interval=30m (page-worthy)
+#   warning  → group_wait=30s, repeat_interval=2h  (ticket-worthy)
+# ─────────────────────────────────────────────────────────────────────────────
+
+global:
+  # After a resolved alert, wait this long before sending a "resolved" notification.
+  resolve_timeout: 5m
+
+# ── Routing Tree ──────────────────────────────────────────────────────────────
+route:
+  # Default receiver for anything not matched by child routes.
+  receiver: "aether-guard-listener"
+  group_by: ["alertname", "service", "slo"]
+  group_wait: 15s        # wait to batch alerts in the same group
+  group_interval: 30s    # how long to wait before re-sending a group
+  repeat_interval: 1h    # don't re-notify more than once per hour by default
+
+  routes:
+    # Critical alerts: page fast, re-page often.
+    - matchers:
+        - severity="critical"
+      group_wait: 5s
+      repeat_interval: 30m
+      receiver: "aether-guard-listener"
+
+    # Warning alerts: slower cadence, no repeat spam.
+    - matchers:
+        - severity="warning"
+      group_wait: 30s
+      repeat_interval: 2h
+      receiver: "aether-guard-listener"
+
+# ── Receivers ─────────────────────────────────────────────────────────────────
+receivers:
+  - name: "aether-guard-listener"
+    webhook_configs:
+      - url: "http://listener:8081/webhook"
+        send_resolved: true  # send a notification when the alert resolves
+        max_alerts: 20       # cap batch size to keep payloads manageable
+
+# ── Inhibition Rules ──────────────────────────────────────────────────────────
+# Suppress lower-severity alerts when a higher-severity alert is already firing
+# for the same service. Avoids alert storms during full outages.
+inhibit_rules:
+  # If the service is completely down, don't page separately for high error rate
+  # or high latency — those are symptoms of the same root cause.
+  - source_matchers:
+      - alertname="TargetServiceDown"
+    target_matchers:
+      - service="target-service"
+    equal: ["service"]
+
+  # Critical error budget burn inhibits the warning-level slow burn alert.
+  - source_matchers:
+      - alertname="SLOErrorBudgetBurnCritical"
+    target_matchers:
+      - alertname="SLOErrorBudgetBurnWarning"
+    equal: ["service"]

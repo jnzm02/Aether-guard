@@ -1,0 +1,47 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Prometheus configuration — Phase 1
+#
+# SLO definition (encoded as recording/alert rules in Phase 2):
+#   Availability SLO : 99.9% of requests return 2xx/3xx over a 30-day window
+#   Latency SLO      : 99th-percentile request duration < 200 ms
+#   Error Budget     : 0.1% of requests may fail = ~43.2 min/month
+# ─────────────────────────────────────────────────────────────────────────────
+
+global:
+  scrape_interval:     15s   # How often to scrape targets
+  evaluation_interval: 15s   # How often to evaluate rules
+  scrape_timeout:      10s
+
+  # Attach these labels to all time-series scraped from this Prometheus.
+  external_labels:
+    environment: "local-dev"
+    project:     "aether-guard"
+
+# ── Alertmanager Connection ───────────────────────────────────────────────────
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+      timeout: 10s
+
+# ── Alert Rule Files ──────────────────────────────────────────────────────────
+rule_files:
+  - "/etc/prometheus/rules/*.yml"
+
+# ── Scrape Configurations ─────────────────────────────────────────────────────
+scrape_configs:
+
+  # Prometheus scrapes itself — useful for meta-monitoring.
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Primary target: the intentionally-broken Go microservice.
+  - job_name: "target-service"
+    metrics_path: "/metrics"
+    scrape_interval: 5s   # More frequent during chaos experiments
+    static_configs:
+      - targets: ["target-service:8080"]
+        labels:
+          service: "target-service"
+          team:    "platform"

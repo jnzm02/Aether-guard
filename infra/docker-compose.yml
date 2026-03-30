@@ -1,0 +1,158 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Aether-Guard — Full Stack (Phases 1-3)
+#
+# Services:
+#   target-service  :8080   The intentionally-breakable Go microservice
+#   prometheus      :9090   Scrapes /metrics every 15s
+#   alertmanager    :9093   Routes SLO alerts to the listener
+#   listener        :8081   Python webhook receiver + enrichment
+#   agent           :8082   AI SRE Agent (Claude-powered RCA)
+#
+# Secrets: copy .env.example → .env and fill in ANTHROPIC_API_KEY
+# ─────────────────────────────────────────────────────────────────────────────
+version: "3.9"
+
+# Docker Compose automatically loads .env from the project root (one level up).
+# Run from the repo root:  docker compose -f infra/docker-compose.yml up
+# Or set env_file explicitly below if running from infra/ directory.
+
+
+networks:
+  aether-net:
+    driver: bridge
+
+volumes:
+  prometheus_data:
+  agent_data:
+
+services:
+
+  # ── The "Broken" Service ──────────────────────────────────────────────────
+  target-service:
+    build:
+      context: ../services/target-service
+      dockerfile: Dockerfile
+    image: aether-guard/target-service:latest
+    container_name: target-service
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+    restart: unless-stopped
+    networks:
+      - aether-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    labels:
+      com.aether-guard.component: "target-service"
+      com.aether-guard.phase: "1"
+
+  # ── Prometheus ────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=7d"
+      - "--web.enable-lifecycle"
+      - "--web.enable-admin-api"
+    restart: unless-stopped
+    networks:
+      - aether-net
+    depends_on:
+      target-service:
+        condition: service_healthy
+    labels:
+      com.aether-guard.component: "prometheus"
+      com.aether-guard.phase: "1-2"
+
+  # ── Alertmanager ──────────────────────────────────────────────────────────
+  alertmanager:
+    image: prom/alertmanager:v0.26.0
+    container_name: alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+      - "--log.level=info"
+    restart: unless-stopped
+    networks:
+      - aether-net
+    labels:
+      com.aether-guard.component: "alertmanager"
+      com.aether-guard.phase: "2"
+
+  # ── Alert Listener (Python) ────────────────────────────────────────────────
+  listener:
+    build:
+      context: ../services/listener
+      dockerfile: Dockerfile
+    image: aether-guard/listener:latest
+    container_name: listener
+    ports:
+      - "8081:8081"
+    environment:
+      - PROMETHEUS_URL=http://prometheus:9090
+      - TARGET_CONTAINER=target-service
+      - MAX_QUEUE_SIZE=500
+    volumes:
+      # Mount Docker socket so the listener can fetch container logs.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+    networks:
+      - aether-net
+    depends_on:
+      - prometheus
+      - alertmanager
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8081/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    labels:
+      com.aether-guard.component: "listener"
+      com.aether-guard.phase: "2"
+
+  # ── AI SRE Agent (Phase 3) ────────────────────────────────────────────────
+  agent:
+    build:
+      context: ../services/agent
+      dockerfile: Dockerfile
+    image: aether-guard/agent:latest
+    container_name: agent
+    ports:
+      - "8082:8082"
+    env_file:
+      - ../.env        # loads ANTHROPIC_API_KEY + optional overrides
+    environment:
+      - LISTENER_URL=http://listener:8081
+      - ANALYSIS_LOG_PATH=/app/data/analyses.jsonl
+    volumes:
+      - agent_data:/app/data
+    restart: unless-stopped
+    networks:
+      - aether-net
+    depends_on:
+      listener:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8082/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    labels:
+      com.aether-guard.component: "agent"
+      com.aether-guard.phase: "3"

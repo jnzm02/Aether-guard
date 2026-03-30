@@ -1,0 +1,163 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Aether-Guard SLO Alert Rules
+#
+# Methodology: Google SRE Workbook — Multi-Window, Multi-Burn-Rate Alerts
+#
+# SLO Contract:
+#   Availability : 99.9% of requests return non-5xx over a 30-day window
+#   Latency      : p99 request duration < 200ms
+#   Error Budget : 0.1% of requests may fail ≈ 43.2 minutes / 30 days
+#
+# Burn-rate interpretation:
+#   1×  burn = 0.1% error rate  → exhausts budget in exactly 30 days
+#   6×  burn = 0.6% error rate  → exhausts budget in 5 days
+#   14× burn = 1.4% error rate  → exhausts budget in ~50 hours (PAGE NOW)
+#   50× burn = 5.0% error rate  → exhausts budget in ~14 hours (PAGE IMMEDIATELY)
+# ─────────────────────────────────────────────────────────────────────────────
+
+groups:
+
+  # ── Recording Rules ─────────────────────────────────────────────────────────
+  # Pre-compute ratios so alert expressions are cheap to evaluate.
+  - name: aether_guard_slo_recording
+    interval: 30s
+    rules:
+
+      # Error ratio over short window — drives fast-burn alert.
+      - record: job:aether_guard_error_ratio:rate5m
+        expr: |
+          sum(rate(aether_guard_http_requests_total{status_code=~"5.."}[5m]))
+          /
+          sum(rate(aether_guard_http_requests_total[5m]))
+
+      # Error ratio over medium window — drives slow-burn alert.
+      - record: job:aether_guard_error_ratio:rate30m
+        expr: |
+          sum(rate(aether_guard_http_requests_total{status_code=~"5.."}[30m]))
+          /
+          sum(rate(aether_guard_http_requests_total[30m]))
+
+      # Request throughput — useful for context in post-mortems.
+      - record: job:aether_guard_request_rate:rate5m
+        expr: |
+          sum(rate(aether_guard_http_requests_total[5m]))
+
+      # p99 latency over 5-minute window — drives latency SLO alert.
+      - record: job:aether_guard_latency_p99:rate5m
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum(rate(aether_guard_http_request_duration_seconds_bucket[5m])) by (le)
+          )
+
+      # p50 latency — baseline health indicator.
+      - record: job:aether_guard_latency_p50:rate5m
+        expr: |
+          histogram_quantile(
+            0.50,
+            sum(rate(aether_guard_http_request_duration_seconds_bucket[5m])) by (le)
+          )
+
+  # ── Alerting Rules ──────────────────────────────────────────────────────────
+  - name: aether_guard_slo_alerts
+    rules:
+
+      # ── 1. CRITICAL: Fast Error Budget Burn ──────────────────────────────────
+      # 5% error rate = 50× budget burn rate.
+      # At this pace the entire 30-day error budget is gone in ~14.4 hours.
+      # `for: 2m` ensures we don't page on a single-request blip.
+      - alert: SLOErrorBudgetBurnCritical
+        expr: job:aether_guard_error_ratio:rate5m > 0.05
+        for: 2m
+        labels:
+          severity: critical
+          team: platform
+          slo: availability
+          service: target-service
+        annotations:
+          summary: "CRITICAL: target-service error budget burning fast (>5% error rate)"
+          description: >
+            The 5-minute error ratio is {{ $value | humanizePercentage }},
+            which is well above the 0.1% error budget allowance.
+            At this burn rate the entire 30-day error budget will be exhausted in under 15 hours.
+            Immediate investigation required.
+          runbook_url: "https://github.com/aether-guard/runbooks/blob/main/high-error-rate.md"
+          dashboard_url: "http://localhost:9090/graph?g0.expr=job%3Aaether_guard_error_ratio%3Arate5m"
+
+      # ── 2. WARNING: Slow Error Budget Burn ───────────────────────────────────
+      # 0.5% error rate = 5× budget burn rate.
+      # Still harmful if sustained — burns 5 days of budget in a single day.
+      - alert: SLOErrorBudgetBurnWarning
+        expr: job:aether_guard_error_ratio:rate30m > 0.005
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+          slo: availability
+          service: target-service
+        annotations:
+          summary: "WARNING: target-service elevated error rate over 30m (>0.5%)"
+          description: >
+            The 30-minute error ratio of {{ $value | humanizePercentage }} exceeds 0.5%
+            (5× error budget burn rate). If sustained, this will exhaust the monthly
+            error budget within 6 days. Investigate before it escalates.
+          runbook_url: "https://github.com/aether-guard/runbooks/blob/main/high-error-rate.md"
+
+      # ── 3. CRITICAL: Latency SLO Breach ──────────────────────────────────────
+      # SLO: 99th-percentile latency < 200ms. Bucket at le="0.2" is the gate.
+      - alert: SLOLatencyP99Breach
+        expr: job:aether_guard_latency_p99:rate5m > 0.2
+        for: 2m
+        labels:
+          severity: critical
+          team: platform
+          slo: latency
+          service: target-service
+        annotations:
+          summary: "CRITICAL: p99 latency {{ $value | humanizeDuration }} breaches 200ms SLO"
+          description: >
+            The 5-minute p99 request latency is {{ $value | humanizeDuration }},
+            which exceeds the SLO target of 200ms.
+            Users in the 99th percentile are experiencing unacceptable response times.
+          runbook_url: "https://github.com/aether-guard/runbooks/blob/main/high-latency.md"
+          dashboard_url: "http://localhost:9090/graph?g0.expr=job%3Aaether_guard_latency_p99%3Arate5m"
+
+      # ── 4. WARNING: Memory Saturation (Chaos Leak) ───────────────────────────
+      # Fires when intentional leak exceeds 100 MiB. In production this models
+      # "container approaching memory limit → OOM kill imminent".
+      - alert: MemorySaturationWarning
+        expr: aether_guard_chaos_memleak_bytes_allocated > 104857600
+        for: 1m
+        labels:
+          severity: warning
+          team: platform
+          slo: saturation
+          service: target-service
+        annotations:
+          summary: "WARNING: target-service memory leak detected ({{ $value | humanize1024 }}B)"
+          description: >
+            The chaos memory leak gauge reports {{ $value | humanize1024 }}B of
+            intentionally retained heap. RSS will grow unbounded; OOM kill is likely
+            if the leak is not stopped. Trigger /chaos/reset or roll back the deployment.
+          runbook_url: "https://github.com/aether-guard/runbooks/blob/main/memory-leak.md"
+
+      # ── 5. CRITICAL: Service Down ─────────────────────────────────────────────
+      # The most fundamental alert — Prometheus cannot scrape the target at all.
+      - alert: TargetServiceDown
+        expr: up{job="target-service"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          team: platform
+          service: target-service
+        annotations:
+          summary: "CRITICAL: target-service is DOWN — Prometheus scrape failing"
+          description: >
+            Prometheus has been unable to scrape target-service for 30+ seconds.
+            The service may be crashed, OOM-killed, or network-isolated.
+            100% of requests are failing. Error budget is being burned at maximum rate.
+          runbook_url: "https://github.com/aether-guard/runbooks/blob/main/service-down.md"
+
+  # ── Inhibition context (referenced in alertmanager.yml) ────────────────────
+  # When TargetServiceDown is firing, all other alerts are noise — the root cause
+  # is the outage itself. Alertmanager inhibit_rules handle the suppression.

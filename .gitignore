@@ -1,0 +1,29 @@
+# ── Secrets — never commit these ──────────────────────────────────────────────
+.env
+
+# ── Go build artifacts ─────────────────────────────────────────────────────────
+services/target-service/target-service
+/tmp/aether-target-svc
+
+# ── Python cache ───────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# ── Docker volumes / local data ────────────────────────────────────────────────
+infra/data/
+services/agent/data/
+
+# ── Editor ─────────────────────────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# ── CI download artifacts ──────────────────────────────────────────────────────
+*.tar.gz
+*.zip
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+Thumbs.db
