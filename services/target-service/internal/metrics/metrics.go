@@ -8,6 +8,7 @@ package metrics
 
 import (
 	"net/http"
+	"runtime"
 	"strconv"
 	"time"
 
@@ -81,6 +82,75 @@ var (
 			Help:      "Fraction of the 30-day error budget consumed (0.0 = full budget, 1.0 = depleted).",
 		},
 	)
+
+	// ── Runtime / Saturation golden signals ──────────────────────────────────────
+
+	// RuntimeGoroutines is a gauge tracking the live goroutine count.
+	// A monotonic rise indicates goroutine leaks.
+	RuntimeGoroutines = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "aether_guard",
+			Subsystem: "runtime",
+			Name:      "goroutines",
+			Help:      "Number of goroutines currently in existence.",
+		},
+	)
+
+	// RuntimeHeapBytes tracks in-use heap bytes — the primary memory saturation SLI.
+	RuntimeHeapBytes = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "aether_guard",
+			Subsystem: "runtime",
+			Name:      "heap_inuse_bytes",
+			Help:      "Bytes of in-use heap spans reported by runtime.MemStats.HeapInuse.",
+		},
+	)
+
+	// RuntimeHeapObjects tracks live heap object count — rises during memory leaks.
+	RuntimeHeapObjects = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "aether_guard",
+			Subsystem: "runtime",
+			Name:      "heap_objects",
+			Help:      "Number of allocated heap objects.",
+		},
+	)
+
+	// RuntimeGCPauseMicros records the duration of the most recent GC stop-the-world pause.
+	// Buckets cover 1 µs to 100 ms to catch both fast and pathological pauses.
+	RuntimeGCPauseMicros = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "aether_guard",
+			Subsystem: "runtime",
+			Name:      "gc_pause_microseconds",
+			Help:      "Duration of the last GC stop-the-world pause in microseconds.",
+			Buckets:   []float64{1, 10, 50, 100, 500, 1_000, 5_000, 10_000, 50_000, 100_000},
+		},
+	)
+
+	// ── DB query latency ─────────────────────────────────────────────────────────
+
+	// DBQueryDuration measures real SQLite query latency, partitioned by table and operation.
+	DBQueryDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "aether_guard",
+			Subsystem: "db",
+			Name:      "query_duration_seconds",
+			Help:      "SQLite query latency, partitioned by table and operation.",
+			Buckets:   []float64{0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5},
+		},
+		[]string{"table", "operation"},
+	)
+
+	// ChaosCPUCoresActive tracks the number of CPU-burning goroutines injected by chaos/cpu.
+	ChaosCPUCoresActive = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "aether_guard",
+			Subsystem: "chaos",
+			Name:      "cpu_cores_active",
+			Help:      "Number of goroutines currently burning CPU via the chaos/cpu endpoint.",
+		},
+	)
 )
 
 // statusRecorder wraps http.ResponseWriter to capture the status code written
@@ -110,4 +180,33 @@ func Middleware(next http.Handler) http.Handler {
 		HTTPRequestsTotal.WithLabelValues(r.Method, r.URL.Path, statusCode).Inc()
 		HTTPRequestDuration.WithLabelValues(r.Method, r.URL.Path).Observe(duration)
 	})
+}
+
+// StartRuntimeCollector launches a background goroutine that samples Go runtime
+// statistics every 5 seconds and publishes them to Prometheus.
+// Call once from main; pass a channel that is closed on shutdown.
+func StartRuntimeCollector(stop <-chan struct{}) {
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				RuntimeGoroutines.Set(float64(runtime.NumGoroutine()))
+
+				var ms runtime.MemStats
+				runtime.ReadMemStats(&ms)
+
+				RuntimeHeapBytes.Set(float64(ms.HeapInuse))
+				RuntimeHeapObjects.Set(float64(ms.HeapObjects))
+
+				if ms.NumGC > 0 {
+					lastPauseNs := ms.PauseNs[(ms.NumGC+255)%256]
+					RuntimeGCPauseMicros.Observe(float64(lastPauseNs) / 1_000)
+				}
+			case <-stop:
+				return
+			}
+		}
+	}()
 }

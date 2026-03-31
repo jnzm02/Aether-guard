@@ -1,4 +1,4 @@
-// Package chaos implements the three canonical failure modes used in Aether-Guard:
+// Package chaos implements the canonical failure modes used in Aether-Guard:
 //
 //  1. Memory Leak  — /chaos/memleak?mb=<N>
 //     Allocates N MiB of heap and retains a live reference, preventing GC.
@@ -14,12 +14,21 @@
 //
 //  4. Reset         — /chaos/reset
 //     Releases leaked memory and resets all chaos state. Useful during demos.
+//
+//  5. CPU Spike     — /chaos/cpu?cores=<N>&ms=<N>
+//     Spins N goroutines executing compute-intensive work for N milliseconds.
+//     Simulates runaway CPU consumers, hot loops, or missing rate limits.
+//
+//  6. Status        — /chaos/status
+//     Returns a JSON snapshot of all active chaos injections.
 package chaos
 
 import (
+	"context"
 	"encoding/json"
 	"math/rand"
 	"net/http"
+	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -42,6 +51,13 @@ var (
 	// totalLeakedBytes tracks the cumulative bytes never freed; exported to
 	// Prometheus as a gauge so the alert fires when RSS grows unbounded.
 	totalLeakedBytes atomic.Int64
+)
+
+// cpuMu protects cpuCancel; never held while doing I/O.
+var (
+	cpuMu     sync.Mutex
+	cpuCancel context.CancelFunc
+	cpuActive atomic.Int32 // goroutines currently burning CPU
 )
 
 // respondJSON writes v as a JSON body. Errors are intentionally swallowed —
@@ -219,6 +235,15 @@ func ResetHandler(logger *zap.Logger) http.Handler {
 		totalLeakedBytes.Store(0)
 		metrics.MemLeakBytesAllocated.Set(0)
 
+		// Stop any active CPU spike.
+		cpuMu.Lock()
+		if cpuCancel != nil {
+			cpuCancel()
+			cpuCancel = nil
+		}
+		cpuMu.Unlock()
+		metrics.ChaosCPUCoresActive.Set(0)
+
 		logger.Info("✅  chaos/reset: all chaos state cleared",
 			zap.Int64("bytes_freed", freed),
 		)
@@ -227,6 +252,98 @@ func ResetHandler(logger *zap.Logger) http.Handler {
 			"status":      "reset",
 			"freed_bytes": freed,
 			"freed_mb":    freed / (1024 * 1024),
+		})
+	})
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 5. CPU Spike
+// ──────────────────────────────────────────────────────────────────────────────
+
+// CPUSpikeHandler spins `cores` goroutines executing compute-intensive work for
+// `ms` milliseconds. Closing the previous spike before starting a new one
+// prevents unbounded goroutine accumulation.
+//
+//	GET /chaos/cpu?cores=2&ms=30000
+func CPUSpikeHandler(logger *zap.Logger) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cores := queryInt(r, "cores", 1, 1, runtime.NumCPU()*4)
+		durationMs := queryInt(r, "ms", 30_000, 100, 300_000)
+		if cores < 0 || durationMs < 0 {
+			http.Error(w, "invalid parameters: cores 1..NumCPU*4, ms 100..300000", http.StatusBadRequest)
+			return
+		}
+
+		// Cancel any running spike before starting a new one.
+		cpuMu.Lock()
+		if cpuCancel != nil {
+			cpuCancel()
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(durationMs)*time.Millisecond)
+		cpuCancel = cancel
+		cpuMu.Unlock()
+
+		for i := 0; i < cores; i++ {
+			cpuActive.Add(1)
+			go func() {
+				defer cpuActive.Add(-1)
+				burnCPU(ctx)
+			}()
+		}
+
+		metrics.ChaosCPUCoresActive.Set(float64(cores))
+		metrics.ChaosErrorsInjected.WithLabelValues("cpu_spike").Inc()
+
+		logger.Warn("⚠️  chaos/cpu: CPU spike injected",
+			zap.Int("cores", cores),
+			zap.Int("duration_ms", durationMs),
+		)
+
+		respondJSON(w, http.StatusOK, map[string]any{
+			"event":       "cpu_spike_injected",
+			"cores":       cores,
+			"duration_ms": durationMs,
+		})
+	})
+}
+
+// burnCPU runs a tight XOR-hash loop until ctx is cancelled.
+// Each outer iteration does 500 k multiplies — hard for the compiler to
+// eliminate but still yields to the scheduler via runtime.Gosched.
+func burnCPU(ctx context.Context) {
+	var sink uint64
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			for i := uint64(0); i < 500_000; i++ {
+				sink ^= i*6364136223846793005 + 1442695040888963407
+			}
+			_ = sink
+			runtime.Gosched() // allow context check by Go scheduler
+		}
+	}
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// 6. Status
+// ──────────────────────────────────────────────────────────────────────────────
+
+// StatusHandler returns a JSON snapshot of all active chaos injections.
+//
+//	GET /chaos/status
+func StatusHandler(logger *zap.Logger) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		leakedBytes := totalLeakedBytes.Load()
+		activeCores := cpuActive.Load()
+
+		respondJSON(w, http.StatusOK, map[string]any{
+			"memory_leak_active":  leakedBytes > 0,
+			"memory_leaked_bytes": leakedBytes,
+			"memory_leaked_mb":    leakedBytes / (1024 * 1024),
+			"cpu_spike_active":    activeCores > 0,
+			"cpu_cores_active":    activeCores,
 		})
 	})
 }

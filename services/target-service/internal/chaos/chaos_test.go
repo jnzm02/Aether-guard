@@ -281,3 +281,118 @@ func TestQueryInt(t *testing.T) {
 		})
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CPUSpikeHandler
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestCPUSpikeHandler_ValidRequest(t *testing.T) {
+// Reset global CPU state.
+cpuMu.Lock()
+if cpuCancel != nil {
+cpuCancel()
+cpuCancel = nil
+}
+cpuMu.Unlock()
+
+req := httptest.NewRequest(http.MethodGet, "/chaos/cpu?cores=1&ms=100", nil)
+rec := httptest.NewRecorder()
+
+CPUSpikeHandler(newLogger()).ServeHTTP(rec, req)
+
+if rec.Code != http.StatusOK {
+t.Fatalf("status = %d, want 200", rec.Code)
+}
+
+var body map[string]any
+if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+t.Fatalf("body decode: %v", err)
+}
+if got, _ := body["event"].(string); got != "cpu_spike_injected" {
+t.Errorf("event = %q, want cpu_spike_injected", got)
+}
+
+// Clean up: cancel the spike goroutine.
+cpuMu.Lock()
+if cpuCancel != nil {
+cpuCancel()
+cpuCancel = nil
+}
+cpuMu.Unlock()
+}
+
+func TestCPUSpikeHandler_InvalidParams(t *testing.T) {
+tests := []struct {
+name  string
+query string
+}{
+{name: "cores=0 (below min)", query: "?cores=0&ms=100"},
+{name: "ms=50 (below min)", query: "?cores=1&ms=50"},
+{name: "non-numeric cores", query: "?cores=bad&ms=100"},
+}
+for _, tc := range tests {
+t.Run(tc.name, func(t *testing.T) {
+req := httptest.NewRequest(http.MethodGet, "/chaos/cpu"+tc.query, nil)
+rec := httptest.NewRecorder()
+CPUSpikeHandler(newLogger()).ServeHTTP(rec, req)
+if rec.Code != http.StatusBadRequest {
+t.Errorf("status = %d, want 400", rec.Code)
+}
+})
+}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// StatusHandler
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestStatusHandler_ReportsMemoryLeak(t *testing.T) {
+// Inject a small leak.
+memLeakMu.Lock()
+memLeakStore = nil
+memLeakMu.Unlock()
+totalLeakedBytes.Store(0)
+
+leakReq := httptest.NewRequest(http.MethodGet, "/chaos/memleak?mb=1", nil)
+leakRec := httptest.NewRecorder()
+MemLeakHandler(newLogger()).ServeHTTP(leakRec, leakReq)
+
+req := httptest.NewRequest(http.MethodGet, "/chaos/status", nil)
+rec := httptest.NewRecorder()
+StatusHandler(newLogger()).ServeHTTP(rec, req)
+
+if rec.Code != http.StatusOK {
+t.Fatalf("status = %d, want 200", rec.Code)
+}
+
+var body map[string]any
+if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+t.Fatalf("body decode: %v", err)
+}
+if active, _ := body["memory_leak_active"].(bool); !active {
+t.Error("expected memory_leak_active=true after memleak injection")
+}
+}
+
+func TestStatusHandler_CleanAfterReset(t *testing.T) {
+// Inject then reset.
+memLeakMu.Lock()
+memLeakStore = nil
+memLeakMu.Unlock()
+totalLeakedBytes.Store(1024) // fake a leak
+
+ResetHandler(newLogger()).ServeHTTP(httptest.NewRecorder(),
+httptest.NewRequest(http.MethodPost, "/chaos/reset", nil))
+
+req := httptest.NewRequest(http.MethodGet, "/chaos/status", nil)
+rec := httptest.NewRecorder()
+StatusHandler(newLogger()).ServeHTTP(rec, req)
+
+var body map[string]any
+if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+t.Fatalf("body decode: %v", err)
+}
+if active, _ := body["memory_leak_active"].(bool); active {
+t.Error("expected memory_leak_active=false after reset")
+}
+}
