@@ -2,12 +2,13 @@
 
 > **Autonomous SRE AI Agent** — monitors a microservice, detects failures using Prometheus SLO burn-rate alerting, performs Root Cause Analysis with Claude AI, and executes automated remediation with blameless post-mortem generation.
 
-[![CI](https://github.com/YOUR_USERNAME/aether-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_USERNAME/aether-guard/actions/workflows/ci.yml)
+[![CI](https://github.com/jnzm02/Aether-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/jnzm02/Aether-guard/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/Go-1.21-00ADD8?logo=go)
 ![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python)
 ![Prometheus](https://img.shields.io/badge/Prometheus-2.48-E6522C?logo=prometheus)
 ![Claude](https://img.shields.io/badge/Claude-Sonnet-8A2BE2)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker)
+![Kubernetes](https://img.shields.io/badge/Kubernetes-manifests-326CE5?logo=kubernetes)
 
 ---
 
@@ -92,27 +93,47 @@ aether-guard/
 │   ├── target-service/          # Go microservice with chaos endpoints
 │   │   ├── cmd/server/main.go
 │   │   └── internal/
-│   │       ├── chaos/           # MemLeak, Latency, Error injection
-│   │       ├── handlers/        # /api/users, /api/orders, /health
-│   │       └── metrics/         # Prometheus instruments + middleware
+│   │       ├── chaos/           # MemLeak, Latency, Error injection + tests
+│   │       ├── handlers/        # /api/users, /api/orders, /health + tests
+│   │       └── metrics/         # Prometheus instruments + middleware + tests
 │   ├── listener/                # Python alert enrichment service
-│   │   └── listener.py          # FastAPI webhook + Prometheus + Docker log fetch
+│   │   ├── listener.py          # FastAPI webhook + Prometheus + Docker log fetch
+│   │   └── tests/               # 14 pytest unit tests
 │   └── agent/                   # Python AI SRE agent
 │       ├── agent.py             # Polling loop + FastAPI endpoints
 │       ├── prompt.py            # Claude system prompt + context builder
-│       └── remediation.py       # Docker SDK remediation engine (safety gates)
+│       ├── remediation.py       # Docker SDK remediation engine (safety gates)
+│       └── tests/               # 44 pytest unit tests
 ├── infra/
-│   ├── docker-compose.yml       # Full 5-service stack
+│   ├── docker-compose.yml       # Full 6-service stack
 │   ├── prometheus/
 │   │   ├── prometheus.yml       # Scrape config + alerting stanza
 │   │   └── rules/slo_alerts.yml # 5 SLO-based alert rules + recording rules
-│   └── alertmanager/
-│       └── alertmanager.yml     # Routing + inhibit rules
+│   ├── alertmanager/
+│   │   └── alertmanager.yml     # Routing + inhibit rules
+│   └── grafana/                 # Auto-provisioned SLO dashboard (21 panels)
+│       ├── provisioning/
+│       └── dashboards/
+├── k8s/                         # Production Kubernetes manifests (Kustomize)
+│   ├── namespace.yaml
+│   ├── target-service.yaml      # Deployment + Service + HPA (2→10 pods)
+│   ├── prometheus.yaml          # RBAC + ConfigMap + PVC + Deployment
+│   ├── alertmanager.yaml
+│   ├── listener.yaml
+│   ├── agent.yaml               # Secret + PVC + Deployment
+│   ├── grafana.yaml
+│   └── kustomization.yaml
+├── docs/
+│   └── runbooks/                # SRE runbooks for all 5 alert types
+│       ├── high-error-rate.md
+│       ├── high-latency.md
+│       ├── memory-leak.md
+│       └── service-down.md
 ├── scripts/
 │   ├── load_gen.py              # Traffic generator with chaos scenarios
 │   └── generate_postmortem.py  # Standalone post-mortem CLI
 ├── postmortems/                 # Auto-generated blameless post-mortems
-├── .github/workflows/ci.yml     # CI: build, lint, config-validate, smoke test
+├── .github/workflows/ci.yml     # 6-job CI pipeline (see CI section)
 ├── .env.example                 # Environment variable template
 └── Makefile                     # Developer ergonomics
 ```
@@ -130,8 +151,8 @@ aether-guard/
 ### 1. Clone & configure
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/aether-guard.git
-cd aether-guard
+git clone https://github.com/jnzm02/Aether-guard.git
+cd Aether-guard
 cp .env.example .env
 # Edit .env — add your ANTHROPIC_API_KEY
 ```
@@ -142,7 +163,7 @@ cp .env.example .env
 make docker-up
 ```
 
-All 5 services start in dependency order. Verify:
+All 6 services start in dependency order. Verify:
 
 ```bash
 make health-check   # checks all /health endpoints
@@ -205,17 +226,19 @@ make chaos-reset        # restore healthy state
 The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push and PR:
 
 ```
-go-build ─────────────────────┐
-python-lint ──────────────────┼──► docker-build ──► integration-smoke
-validate-infra-config ────────┘
+go-build (build+vet+test) ─┐
+python-lint ───────────────┼──► docker-build ──► integration-smoke
+python-test ───────────────┤
+validate-infra-config ─────┘
 ```
 
 | Job | What it checks |
 |-----|----------------|
-| `go-build` | `go build` + `go vet` on the target-service |
+| `go-build` | `go build` + `go vet` + `go test -race` (23 tests) |
 | `python-lint` | `ruff` linting on agent, listener, scripts |
+| `python-test` | `pytest` — 44 agent tests + 14 listener tests, JUnit XML artifacts |
 | `validate-infra-config` | `promtool check config/rules` + `amtool check-config` |
-| `docker-build` | Builds all 3 Docker images |
+| `docker-build` | Builds all 3 Docker images (only runs if all 4 above pass) |
 | `integration-smoke` | Starts full stack, hits all health endpoints, queries Prometheus |
 
 ---
@@ -301,6 +324,61 @@ Post-mortems are written to `postmortems/YYYYMMDD-HHMMSS-{AlertName}.md`.
 
 ---
 
+## Testing
+
+**81 tests** across Go and Python, all running in CI.
+
+```bash
+# Go — 23 tests (chaos, handlers, metrics)
+cd services/target-service && go test -race ./...
+
+# Python agent — 44 tests (parse/validate, remediation safety gates)
+python3 -m pytest services/agent/tests/ -v
+
+# Python listener — 14 tests (webhook, enrichment, queue)
+python3 -m pytest services/listener/tests/ --import-mode=importlib -v
+```
+
+---
+
+## Kubernetes Deployment
+
+Production-grade manifests in `k8s/` — deploy with a single command:
+
+```bash
+# minikube quick start
+eval $(minikube docker-env)
+docker build -t aether-guard/target-service:latest services/target-service
+docker build -t aether-guard/listener:latest        services/listener
+docker build -t aether-guard/agent:latest           services/agent
+
+kubectl create secret generic agent-secrets \
+  -n aether-guard --from-literal=ANTHROPIC_API_KEY=sk-ant-...
+
+kubectl apply -k k8s/
+```
+
+Key production features: HPA (2→10 pods on CPU), zero-downtime rolling deploys (`maxUnavailable: 0`), `secretKeyRef` for API key, liveness/readiness probes on every service, PVCs for stateful data (Prometheus 5 Gi, agent 1 Gi).
+
+See [`k8s/README.md`](k8s/README.md) for full instructions, NodePort mapping, and secret management options.
+
+---
+
+## Runbooks
+
+Operational playbooks for all 5 alerts in [`docs/runbooks/`](docs/runbooks/):
+
+| Alert | Runbook |
+|-------|---------|
+| `SLOErrorBudgetBurnCritical` / `Warning` | [high-error-rate.md](docs/runbooks/high-error-rate.md) |
+| `SLOLatencyP99Breach` | [high-latency.md](docs/runbooks/high-latency.md) |
+| `MemorySaturationWarning` | [memory-leak.md](docs/runbooks/memory-leak.md) |
+| `TargetServiceDown` | [service-down.md](docs/runbooks/service-down.md) |
+
+Each runbook: thresholds → mitigation commands → PromQL investigation → escalation policy → post-mortem trigger → toil-reduction recommendations.
+
+---
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -310,8 +388,8 @@ Post-mortems are written to `postmortems/YYYYMMDD-HHMMSS-{AlertName}.md`.
 | Alert enrichment | Python 3.11, FastAPI, Docker SDK |
 | AI RCA engine | Anthropic Claude (Sonnet), structured JSON output |
 | Remediation | Docker SDK (`docker restart`, `docker update`) |
-| Orchestration | Docker Compose |
-| CI | GitHub Actions |
+| Orchestration | Docker Compose + **Kubernetes** (Kustomize, HPA) |
+| CI | GitHub Actions (6 jobs: build, lint, test, validate, docker, smoke) |
 
 ---
 
