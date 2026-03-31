@@ -115,7 +115,11 @@ def execute_action(action: str, analysis: dict) -> RemediationResult:
         )
 
     # ── Gate 2: cooldown ─────────────────────────────────────────────────────
-    last = _last_action_ts.get(container, 0.0)
+    # Default sentinel is -inf so that a container with NO prior action is
+    # treated as "infinitely long ago" — always passes the gate.
+    # Using 0.0 would falsely trigger cooldown on systems where
+    # time.monotonic() is small (e.g., fresh CI runners / new containers).
+    last = _last_action_ts.get(container, float("-inf"))
     elapsed = time.monotonic() - last
     if elapsed < COOLDOWN_SECONDS and action not in ("IGNORE",):
         reason = (
