@@ -3,7 +3,7 @@ Tests for the listener webhook parsing and alert enrichment schema.
 """
 import sys
 import os
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
