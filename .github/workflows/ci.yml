@@ -83,7 +83,6 @@ jobs:
       - name: Test agent
         run: |
           python -m pytest services/agent/tests/ \
-            --import-mode=importlib \
             -v --tb=short \
             --junitxml=reports/agent-tests.xml
 
