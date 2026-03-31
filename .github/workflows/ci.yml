@@ -7,9 +7,9 @@ on:
     branches: [main]
 
 jobs:
-  # ── 1. Go service: build + vet ──────────────────────────────────────────────
+  # ── 1. Go service: build + vet + test ──────────────────────────────────────
   go-build:
-    name: Go — Build & Vet
+    name: Go — Build, Vet & Test
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -30,6 +30,9 @@ jobs:
 
       - name: Vet
         run: go vet ./...
+
+      - name: Test
+        run: go test -race -count=1 -timeout=60s ./...
 
   # ── 2. Python: lint agent + listener + scripts ──────────────────────────────
   python-lint:
@@ -54,7 +57,51 @@ jobs:
       - name: Lint scripts
         run: ruff check scripts/
 
-  # ── 3. Prometheus & Alertmanager config validation ──────────────────────────
+  # ── 3. Python: unit tests (agent + listener) ────────────────────────────────
+  python-test:
+    name: Python — Unit Tests
+    runs-on: ubuntu-latest
+    env:
+      ANTHROPIC_API_KEY: "test-ci-placeholder"
+      DRY_RUN: "true"
+      CONFIDENCE_THRESHOLD: "0.75"
+      PROMETHEUS_URL: "http://localhost:9090"
+      TARGET_CONTAINER: "target-service"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install agent test dependencies
+        run: pip install -r services/agent/requirements.txt -r services/agent/requirements-dev.txt
+
+      - name: Install listener test dependencies
+        run: pip install -r services/listener/requirements.txt -r services/listener/requirements-dev.txt
+
+      - name: Test agent
+        run: |
+          python -m pytest services/agent/tests/ \
+            --import-mode=importlib \
+            -v --tb=short \
+            --junitxml=reports/agent-tests.xml
+
+      - name: Test listener
+        run: |
+          python -m pytest services/listener/tests/ \
+            --import-mode=importlib \
+            -v --tb=short \
+            --junitxml=reports/listener-tests.xml
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-test-reports
+          path: reports/
+
+  # ── 4. Prometheus & Alertmanager config validation ──────────────────────────
   validate-infra-config:
     name: Infra — Validate Prometheus & Alertmanager Config
     runs-on: ubuntu-latest
@@ -79,11 +126,11 @@ jobs:
       - name: Check Alertmanager config
         run: amtool check-config infra/alertmanager/alertmanager.yml
 
-  # ── 4. Docker: build all images ─────────────────────────────────────────────
+  # ── 5. Docker: build all images ─────────────────────────────────────────────
   docker-build:
     name: Docker — Build All Images
     runs-on: ubuntu-latest
-    needs: [go-build, python-lint, validate-infra-config]
+    needs: [go-build, python-lint, python-test, validate-infra-config]
     steps:
       - uses: actions/checkout@v4
 
@@ -98,7 +145,7 @@ jobs:
       - name: Build agent
         run: docker build -t aether-guard/agent:ci services/agent
 
-  # ── 5. Integration smoke test (docker compose) ──────────────────────────────
+  # ── 6. Integration smoke test (docker compose) ──────────────────────────────
   integration-smoke:
     name: Integration — Stack Smoke Test
     runs-on: ubuntu-latest
