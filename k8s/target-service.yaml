@@ -1,0 +1,142 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# target-service — the intentionally-breakable Go microservice
+#
+# Highlights:
+#   - 2 replicas for HA (HPA scales 2 → 10 on CPU)
+#   - Separate liveness (/health) and readiness (/ready) probes
+#   - Resource requests/limits sized for a lightweight Go binary
+#   - Rolling update strategy — zero-downtime deploys
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: target-service
+  namespace: aether-guard
+  labels:
+    app: target-service
+    app.kubernetes.io/component: target-service
+    app.kubernetes.io/part-of: aether-guard
+    app.kubernetes.io/version: "1.0.0"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: target-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0   # Never take a pod down before a new one is ready
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: target-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "8080"
+        prometheus.io/path:   "/metrics"
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: target-service
+          image: aether-guard/target-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "8080"
+          resources:
+            requests:
+              cpu:    50m
+              memory: 64Mi
+            limits:
+              cpu:    200m
+              memory: 128Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            failureThreshold: 2
+          securityContext:
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: target-service
+  namespace: aether-guard
+  labels:
+    app: target-service
+    app.kubernetes.io/component: target-service
+    app.kubernetes.io/part-of: aether-guard
+spec:
+  selector:
+    app: target-service
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+  type: ClusterIP
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# HPA — scale target-service from 2 to 10 pods based on CPU load.
+#
+# In production you would add a custom metric (e.g., request rate or p99
+# latency from Prometheus Adapter) as a secondary scaling signal.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: target-service
+  namespace: aether-guard
+  labels:
+    app: target-service
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: target-service
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300   # 5-min cooldown before scale-down
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120

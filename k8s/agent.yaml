@@ -1,0 +1,125 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Agent — Claude-powered AI SRE agent.
+#
+# Secret: create the ANTHROPIC_API_KEY secret before deploying:
+#   kubectl create secret generic agent-secrets \
+#     --namespace aether-guard \
+#     --from-literal=ANTHROPIC_API_KEY=sk-ant-...
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Secret
+metadata:
+  name: agent-secrets
+  namespace: aether-guard
+  labels:
+    app: agent
+    app.kubernetes.io/part-of: aether-guard
+type: Opaque
+stringData:
+  # Replace with your real key. Never commit the real value — use:
+  #   kubectl create secret generic agent-secrets -n aether-guard \
+  #     --from-literal=ANTHROPIC_API_KEY=sk-ant-...
+  ANTHROPIC_API_KEY: "REPLACE_ME"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: agent-data
+  namespace: aether-guard
+  labels:
+    app: agent
+    app.kubernetes.io/part-of: aether-guard
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent
+  namespace: aether-guard
+  labels:
+    app: agent
+    app.kubernetes.io/component: agent
+    app.kubernetes.io/part-of: aether-guard
+spec:
+  replicas: 1   # Single replica — analyses.jsonl is written to PVC
+  selector:
+    matchLabels:
+      app: agent
+  template:
+    metadata:
+      labels:
+        app: agent
+    spec:
+      containers:
+        - name: agent
+          image: aether-guard/agent:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8082
+          env:
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: agent-secrets
+                  key: ANTHROPIC_API_KEY
+            - name: LISTENER_URL
+              value: "http://listener:8081"
+            - name: ANALYSIS_LOG_PATH
+              value: "/app/data/analyses.jsonl"
+            - name: CLAUDE_MODEL
+              value: "claude-sonnet-4-5-20250929"
+            - name: CONFIDENCE_THRESHOLD
+              value: "0.75"
+            - name: POLL_INTERVAL
+              value: "10"
+            - name: DRY_RUN
+              value: "false"
+          resources:
+            requests:
+              cpu:    100m
+              memory: 256Mi
+            limits:
+              cpu:    500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: agent-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent
+  namespace: aether-guard
+  labels:
+    app: agent
+    app.kubernetes.io/part-of: aether-guard
+spec:
+  selector:
+    app: agent
+  ports:
+    - name: http
+      port: 8082
+      targetPort: http
+      nodePort: 30082
+  type: NodePort

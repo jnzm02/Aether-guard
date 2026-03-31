@@ -1,0 +1,122 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Alertmanager — routes SLO alerts to the listener webhook.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: aether-guard
+  labels:
+    app: alertmanager
+    app.kubernetes.io/part-of: aether-guard
+data:
+  alertmanager.yml: |
+    global:
+      resolve_timeout: 5m
+
+    route:
+      group_by: [alertname, service, severity]
+      group_wait:      10s
+      group_interval:  30s
+      repeat_interval: 1h
+      receiver: aether-guard-listener
+
+      routes:
+        - match:
+            severity: critical
+          receiver: aether-guard-listener
+          group_wait: 5s
+          repeat_interval: 15m
+        - match:
+            severity: warning
+          receiver: aether-guard-listener
+          group_wait: 30s
+          repeat_interval: 1h
+
+    receivers:
+      - name: aether-guard-listener
+        webhook_configs:
+          - url: "http://listener:8081/webhook"
+            send_resolved: true
+            max_alerts: 10
+
+    inhibit_rules:
+      - source_match:
+          alertname: TargetServiceDown
+        target_match_re:
+          alertname: "SLO.*|Memory.*"
+        equal: [service]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+  namespace: aether-guard
+  labels:
+    app: alertmanager
+    app.kubernetes.io/component: alertmanager
+    app.kubernetes.io/part-of: aether-guard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alertmanager
+  template:
+    metadata:
+      labels:
+        app: alertmanager
+    spec:
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager:v0.26.0
+          args:
+            - --config.file=/etc/alertmanager/alertmanager.yml
+            - --storage.path=/alertmanager
+            - --log.level=info
+          ports:
+            - name: http
+              containerPort: 9093
+          resources:
+            requests:
+              cpu:    50m
+              memory: 64Mi
+            limits:
+              cpu:    100m
+              memory: 128Mi
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alertmanager
+      volumes:
+        - name: config
+          configMap:
+            name: alertmanager-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  namespace: aether-guard
+  labels:
+    app: alertmanager
+    app.kubernetes.io/part-of: aether-guard
+spec:
+  selector:
+    app: alertmanager
+  ports:
+    - name: http
+      port: 9093
+      targetPort: http
+      nodePort: 30093
+  type: NodePort

@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aether-guard
+  labels:
+    app.kubernetes.io/part-of: aether-guard
+    environment: production

@@ -1,0 +1,91 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Listener — Python webhook receiver that enriches alerts with metrics + logs.
+#
+# Docker socket note: Docker socket is mounted for container log fetching in
+# local/dev deployments. In production Kubernetes, replace this with the
+# Kubernetes API (use the ServiceAccount token to call /api/v1/namespaces/
+# aether-guard/pods/{pod}/log) and remove the hostPath volume entirely.
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: listener
+  namespace: aether-guard
+  labels:
+    app: listener
+    app.kubernetes.io/component: listener
+    app.kubernetes.io/part-of: aether-guard
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: listener
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: listener
+    spec:
+      containers:
+        - name: listener
+          image: aether-guard/listener:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8081
+          env:
+            - name: PROMETHEUS_URL
+              value: "http://prometheus:9090"
+            - name: TARGET_CONTAINER
+              value: "target-service"
+            - name: MAX_QUEUE_SIZE
+              value: "500"
+          resources:
+            requests:
+              cpu:    50m
+              memory: 128Mi
+            limits:
+              cpu:    200m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          volumeMounts:
+            - name: docker-sock
+              mountPath: /var/run/docker.sock
+      volumes:
+        # dev/demo only — replace with k8s API log fetcher in production
+        - name: docker-sock
+          hostPath:
+            path: /var/run/docker.sock
+            type: Socket
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: listener
+  namespace: aether-guard
+  labels:
+    app: listener
+    app.kubernetes.io/part-of: aether-guard
+spec:
+  selector:
+    app: listener
+  ports:
+    - name: http
+      port: 8081
+      targetPort: http
+  type: ClusterIP

@@ -1,0 +1,27 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: aether-guard
+
+resources:
+  - namespace.yaml
+  - target-service.yaml
+  - prometheus.yaml
+  - alertmanager.yaml
+  - listener.yaml
+  - agent.yaml
+  - grafana.yaml
+
+# Image tags — override for each environment:
+#   kustomize edit set image aether-guard/target-service:v1.2.3
+images:
+  - name: aether-guard/target-service
+    newTag: latest
+  - name: aether-guard/listener
+    newTag: latest
+  - name: aether-guard/agent
+    newTag: latest
+
+commonLabels:
+  app.kubernetes.io/managed-by: kustomize
+  app.kubernetes.io/part-of: aether-guard
