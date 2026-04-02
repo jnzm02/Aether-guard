@@ -32,10 +32,63 @@ from typing import Any
 import anthropic
 import httpx
 from fastapi import FastAPI, HTTPException, BackgroundTasks
+from pydantic import BaseModel, Field
 
 from prompt import SYSTEM_PROMPT, build_user_prompt
 from postmortem import generate as generate_postmortem, save as save_postmortem
 from remediation import execute_action
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pydantic response models (used by FastAPI for Swagger schema generation)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class HealthResponse(BaseModel):
+    status: str = Field(..., examples=["ok"])
+    service: str = Field(..., examples=["aether-guard/agent"])
+    version: str = Field(..., examples=["1.1.0"])
+    model: str = Field(..., examples=["claude-sonnet-4-5-20250929"])
+    listener_url: str = Field(..., examples=["http://listener:8081"])
+    poll_interval_s: int = Field(..., examples=[10])
+    dry_run: bool = Field(..., examples=[False])
+    api_key_set: bool = Field(..., examples=[True])
+    analyses_total: int = Field(..., examples=[42])
+    polls: int = Field(..., examples=[100])
+    alerts_processed: int = Field(..., examples=[7])
+    api_errors: int = Field(..., examples=[0])
+    started_at: str = Field(..., examples=["2026-04-02T08:00:00+00:00"])
+
+
+class StatsResponse(BaseModel):
+    polls: int = Field(..., examples=[100])
+    alerts_processed: int = Field(..., examples=[7])
+    api_errors: int = Field(..., examples=[0])
+    started_at: str = Field(..., examples=["2026-04-02T08:00:00+00:00"])
+    analyses_total: int = Field(..., examples=[7])
+
+
+class PostmortemFile(BaseModel):
+    filename: str = Field(..., examples=["20260402-100045-sloerrorbud-abc12345.md"])
+    path: str = Field(..., examples=["/app/data/postmortems/20260402-100045-sloerrorbud-abc12345.md"])
+    size_bytes: int = Field(..., examples=[4096])
+    created_at: str = Field(..., examples=["2026-04-02T10:00:45+00:00"])
+
+
+class PostmortemListResponse(BaseModel):
+    postmortems: list[PostmortemFile]
+    total: int = Field(..., examples=[3])
+
+
+class PostmortemContentResponse(BaseModel):
+    filename: str | None = Field(None, examples=["20260402-100045-sloerrorbud-abc12345.md"])
+    path: str | None = Field(None, examples=["/app/data/postmortems/20260402-100045-sloerrorbud-abc12345.md"])
+    content: str = Field(..., description="Full Markdown content of the post-mortem document.")
+
+
+class AckRequest(BaseModel):
+    analysis: str = Field(..., examples=["Error ratio reached 97% driven by chaos/error endpoint."])
+    action: str = Field(..., examples=["RESTART"])
+    confidence: float = Field(..., ge=0.0, le=1.0, examples=[0.92])
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Logging
@@ -421,20 +474,82 @@ async def lifespan(app: FastAPI):
 
     asyncio.create_task(polling_loop())
     yield
+
+_AGENT_DESCRIPTION = """
+## Autonomous SRE AI Agent
+
+Aether-Guard continuously monitors `aether-guard/target-service`, performs
+AI-powered Root Cause Analysis using **Claude**, executes automated remediations
+(restart / scale / rollback), and generates **blameless post-mortems** — all
+without human intervention.
+
+### Flow
+```
+Alertmanager webhook → Listener → Agent polls → Claude RCA → Remediation → Post-Mortem
+```
+
+### Golden Signals monitored
+| Signal | Metric |
+|--------|--------|
+| Latency | `aether_guard_http_request_duration_seconds` p99 |
+| Traffic | `aether_guard_http_requests_total` |
+| Errors | error ratio (5m window) |
+| Saturation | heap bytes, goroutine count |
+
+### Safety gates
+1. **Confidence threshold** — action only executes if confidence ≥ per-action minimum
+2. **Cooldown** — same container cannot be actioned more than once per 5 minutes
+3. **Dry-run** — `DRY_RUN=true` logs intent without touching Docker
+"""
+
+_TAGS_METADATA = [
+    {
+        "name": "observability",
+        "description": "Health checks and runtime statistics for the agent itself.",
+    },
+    {
+        "name": "analyses",
+        "description": "AI Root Cause Analysis records produced by Claude for each alert.",
+    },
+    {
+        "name": "postmortems",
+        "description": (
+            "Auto-generated blameless post-mortem Markdown documents. "
+            "Each remediation automatically triggers a post-mortem."
+        ),
+    },
+    {
+        "name": "admin",
+        "description": "Manual triggers and operational controls.",
+    },
+]
+
 app = FastAPI(
     title="Aether-Guard AI SRE Agent",
-    description="Phase 3 — autonomous alert analysis with Claude",
-    version="1.0.0",
+    description=_AGENT_DESCRIPTION,
+    version="1.1.0",
+    contact={
+        "name": "Aether-Guard on GitHub",
+        "url": "https://github.com/jnzm02/Aether-guard",
+    },
+    license_info={"name": "MIT"},
+    openapi_tags=_TAGS_METADATA,
     lifespan=lifespan,
 )
 
 
-@app.get("/health")
+@app.get(
+    "/health",
+    tags=["observability"],
+    summary="Agent health check",
+    response_model=HealthResponse,
+    responses={200: {"description": "Agent is running and configuration is valid"}},
+)
 async def health():
     return {
         "status":           "ok",
         "service":          "aether-guard/agent",
-        "version":          "1.0.0",
+        "version":          "1.1.0",
         "model":            CLAUDE_MODEL,
         "listener_url":     LISTENER_URL,
         "poll_interval_s":  POLL_INTERVAL,
@@ -445,7 +560,32 @@ async def health():
     }
 
 
-@app.get("/analyses")
+@app.get(
+    "/analyses",
+    tags=["analyses"],
+    summary="List recent RCA analyses",
+    responses={
+        200: {
+            "description": "Array of analysis records produced by Claude, newest last",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "analyses": [
+                            {
+                                "alert_id": "abc12345",
+                                "alertname": "SLOErrorBudgetBurnCritical",
+                                "action": "RESTART",
+                                "confidence": 0.92,
+                                "analyzed_at": "2026-04-02T10:00:45+00:00",
+                            }
+                        ],
+                        "total": 1,
+                    }
+                }
+            },
+        }
+    },
+)
 async def list_analyses(limit: int = 50):
     """Return the most recent `limit` analyses produced by this agent."""
     return {
@@ -454,7 +594,15 @@ async def list_analyses(limit: int = 50):
     }
 
 
-@app.get("/analyses/{alert_id}")
+@app.get(
+    "/analyses/{alert_id}",
+    tags=["analyses"],
+    summary="Get analysis by alert ID",
+    responses={
+        200: {"description": "Full analysis record for the given alert"},
+        404: {"description": "No analysis found for this alert ID"},
+    },
+)
 async def get_analysis(alert_id: str):
     """Fetch the analysis for a specific alert ID."""
     for a in reversed(analyses):
@@ -463,7 +611,15 @@ async def get_analysis(alert_id: str):
     raise HTTPException(status_code=404, detail=f"No analysis found for alert {alert_id!r}")
 
 
-@app.post("/analyze/{alert_id}")
+@app.post(
+    "/analyze/{alert_id}",
+    tags=["admin"],
+    summary="Manually trigger RCA for a specific alert",
+    responses={
+        200: {"description": "Analysis result including remediation outcome"},
+        404: {"description": "Alert not found in listener queue"},
+    },
+)
 async def manually_trigger(alert_id: str, background_tasks: BackgroundTasks):
     """
     Manually trigger analysis of a specific alert from the listener queue.
@@ -488,7 +644,12 @@ async def manually_trigger(alert_id: str, background_tasks: BackgroundTasks):
     return analysis
 
 
-@app.get("/stats")
+@app.get(
+    "/stats",
+    tags=["observability"],
+    summary="Agent runtime statistics",
+    response_model=StatsResponse,
+)
 async def get_stats():
     return {**_stats, "analyses_total": len(analyses)}
 
@@ -497,7 +658,13 @@ async def get_stats():
 # Phase 4: Post-Mortem endpoints
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.get("/postmortems")
+@app.get(
+    "/postmortems",
+    tags=["postmortems"],
+    summary="List all saved post-mortem documents",
+    response_model=PostmortemListResponse,
+    responses={200: {"description": "List of post-mortem Markdown files, newest first"}},
+)
 async def list_postmortems():
     """List all saved post-mortem files, newest first."""
     if not POSTMORTEM_DIR.exists():
@@ -517,7 +684,16 @@ async def list_postmortems():
     }
 
 
-@app.get("/postmortems/{filename}")
+@app.get(
+    "/postmortems/{filename}",
+    tags=["postmortems"],
+    summary="Read a post-mortem document",
+    response_model=PostmortemContentResponse,
+    responses={
+        200: {"description": "Post-mortem Markdown content"},
+        404: {"description": "File not found"},
+    },
+)
 async def get_postmortem(filename: str):
     """Read a saved post-mortem file by filename."""
     # Prevent path traversal
@@ -528,7 +704,16 @@ async def get_postmortem(filename: str):
     return {"filename": safe, "content": path.read_text(encoding="utf-8")}
 
 
-@app.post("/postmortems/generate/{alert_id}")
+@app.post(
+    "/postmortems/generate/{alert_id}",
+    tags=["postmortems"],
+    summary="(Re-)generate post-mortem for an alert",
+    response_model=PostmortemContentResponse,
+    responses={
+        200: {"description": "Freshly generated post-mortem content"},
+        404: {"description": "No analysis found for this alert ID"},
+    },
+)
 async def generate_postmortem_endpoint(alert_id: str):
     """
     (Re-)generate a blameless post-mortem for a specific alert ID.
@@ -549,7 +734,15 @@ async def generate_postmortem_endpoint(alert_id: str):
     }
 
 
-@app.get("/postmortems/latest/raw")
+@app.get(
+    "/postmortems/latest/raw",
+    tags=["postmortems"],
+    summary="Get the most recent post-mortem",
+    responses={
+        200: {"description": "Post-mortem content for the most recent analysis"},
+        404: {"description": "No analyses processed yet"},
+    },
+)
 async def latest_postmortem_raw():
     """Return the most recently generated post-mortem, or generate one on demand."""
     if not analyses:

@@ -24,6 +24,7 @@ from uuid import uuid4
 import docker
 import httpx
 from fastapi import FastAPI, HTTPException, Request
+from pydantic import BaseModel, Field
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Logging
@@ -44,11 +45,108 @@ MAX_QUEUE_SIZE     = int(os.getenv("MAX_QUEUE_SIZE", "500"))
 # ─────────────────────────────────────────────────────────────────────────────
 # App
 # ─────────────────────────────────────────────────────────────────────────────
+_LISTENER_DESCRIPTION = """
+## Alertmanager Webhook Receiver
+
+The Listener is the ingestion layer of Aether-Guard. It:
+
+1. Receives Alertmanager webhook payloads at **POST /webhook**
+2. Enriches each alert with a **Prometheus metrics snapshot** and the last **100 log lines** from the target container
+3. Queues enriched alerts for the AI Agent to poll
+
+### Alert lifecycle
+```
+firing → enriched → queued → agent polls → ack'd (processed=true)
+```
+"""
+
+_LISTENER_TAGS = [
+    {
+        "name": "alertmanager",
+        "description": "Alertmanager webhook endpoint — receives firing/resolved alerts.",
+    },
+    {
+        "name": "alerts",
+        "description": "Alert queue management — list, retrieve, and acknowledge alerts.",
+    },
+    {
+        "name": "observability",
+        "description": "Health checks and Prometheus snapshot diagnostics.",
+    },
+]
+
 app = FastAPI(
     title="Aether-Guard Alert Listener",
-    description="Phase 2 — Alertmanager webhook receiver with Prometheus + log enrichment",
-    version="1.0.0",
+    description=_LISTENER_DESCRIPTION,
+    version="1.1.0",
+    contact={
+        "name": "Aether-Guard on GitHub",
+        "url": "https://github.com/jnzm02/Aether-guard",
+    },
+    license_info={"name": "MIT"},
+    openapi_tags=_LISTENER_TAGS,
 )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pydantic models
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AlertLabel(BaseModel):
+    alertname: str = Field(..., examples=["SLOErrorBudgetBurnCritical"])
+    severity: str = Field(..., examples=["critical"])
+    slo: str | None = Field(None, examples=["availability"])
+
+
+class WebhookAlertItem(BaseModel):
+    status: str = Field(..., examples=["firing"])
+    labels: dict = Field(default_factory=dict)
+    annotations: dict = Field(default_factory=dict)
+    startsAt: str = Field(..., examples=["2026-04-02T10:00:00Z"])
+    endsAt: str = Field("0001-01-01T00:00:00Z", examples=["0001-01-01T00:00:00Z"])
+    generatorURL: str = Field("", examples=["http://prometheus:9090/graph"])
+    fingerprint: str = Field("", examples=["abc123def456"])
+
+
+class WebhookPayload(BaseModel):
+    version: str = Field("4", examples=["4"])
+    groupKey: str = Field("", examples=["{alertname='SLOErrorBudgetBurnCritical'}"])
+    receiver: str = Field("", examples=["aether-guard-webhook"])
+    status: str = Field("", examples=["firing"])
+    alerts: list[WebhookAlertItem] = Field(default_factory=list)
+    groupLabels: dict = Field(default_factory=dict)
+    commonLabels: dict = Field(default_factory=dict)
+    commonAnnotations: dict = Field(default_factory=dict)
+    externalURL: str = Field("", examples=["http://alertmanager:9093"])
+    truncatedAlerts: int = Field(0, examples=[0])
+
+    model_config = {"extra": "allow"}
+
+
+class WebhookResponse(BaseModel):
+    received: int = Field(..., examples=[1])
+    queued: int = Field(..., examples=[1])
+    skipped: int = Field(..., examples=[0])
+
+
+class AckPayload(BaseModel):
+    analysis: str = Field(..., examples=["Error ratio 97% caused by chaos/error injection."])
+    action: str = Field(..., examples=["RESTART"])
+    confidence: float = Field(..., ge=0.0, le=1.0, examples=[0.92])
+
+
+class AckResponse(BaseModel):
+    id: str = Field(..., examples=["abc12345-dead-beef-0000-000000000000"])
+    status: str = Field(..., examples=["ack'd"])
+
+
+class HealthResponse(BaseModel):
+    status: str = Field(..., examples=["ok"])
+    service: str = Field(..., examples=["aether-guard/listener"])
+    version: str = Field(..., examples=["1.1.0"])
+    queue_depth: int = Field(..., examples=[3])
+    unprocessed: int = Field(..., examples=[1])
+    docker_available: bool = Field(..., examples=[True])
+
 
 # In-memory alert queue.  Phase 3 AI Agent reads from here.
 alert_queue: list[dict[str, Any]] = []
@@ -181,7 +279,16 @@ async def enrich_alert(raw: dict) -> dict:
 # Routes
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.post("/webhook", status_code=202)
+@app.post(
+    "/webhook",
+    status_code=202,
+    tags=["alertmanager"],
+    summary="Receive Alertmanager webhook payload",
+    responses={
+        202: {"description": "Alerts received and queued for AI Agent processing"},
+        422: {"description": "Invalid payload structure"},
+    },
+)
 async def receive_webhook(request: Request):
     """
     Alertmanager webhook endpoint.
@@ -222,7 +329,32 @@ async def receive_webhook(request: Request):
     return {"status": "accepted", "enqueued": len(enriched)}
 
 
-@app.get("/alerts")
+@app.get(
+    "/alerts",
+    tags=["alerts"],
+    summary="List queued alerts",
+    responses={
+        200: {
+            "description": "All alerts in the queue, optionally filtered to unprocessed only",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "alerts": [
+                            {
+                                "id": "abc12345",
+                                "alertname": "SLOErrorBudgetBurnCritical",
+                                "status": "firing",
+                                "processed": False,
+                            }
+                        ],
+                        "total": 1,
+                        "unprocessed": 1,
+                    }
+                }
+            },
+        }
+    },
+)
 async def list_alerts(unprocessed_only: bool = False):
     """
     Return all enriched alerts.  Phase 3 AI Agent polls this endpoint.
@@ -240,7 +372,15 @@ async def list_alerts(unprocessed_only: bool = False):
     }
 
 
-@app.get("/alerts/{alert_id}")
+@app.get(
+    "/alerts/{alert_id}",
+    tags=["alerts"],
+    summary="Get a specific alert by ID",
+    responses={
+        200: {"description": "Full enriched alert record including metrics snapshot and log tail"},
+        404: {"description": "Alert not found"},
+    },
+)
 async def get_alert(alert_id: str):
     """Fetch a single enriched alert by its UUID."""
     for alert in alert_queue:
@@ -249,7 +389,16 @@ async def get_alert(alert_id: str):
     raise HTTPException(status_code=404, detail=f"Alert {alert_id!r} not found")
 
 
-@app.post("/alerts/{alert_id}/ack")
+@app.post(
+    "/alerts/{alert_id}/ack",
+    tags=["alerts"],
+    summary="Acknowledge an alert (mark as processed by agent)",
+    response_model=AckResponse,
+    responses={
+        200: {"description": "Alert marked as processed"},
+        404: {"description": "Alert not found"},
+    },
+)
 async def acknowledge_alert(alert_id: str, request: Request):
     """
     Called by the Phase 3 AI Agent once it has processed an alert.
@@ -262,11 +411,18 @@ async def acknowledge_alert(alert_id: str, request: Request):
             alert["ai_analysis"]     = body.get("analysis")
             alert["action_taken"]    = body.get("action")
             log.info("Alert %s acknowledged — action=%s", alert_id, body.get("action"))
-            return {"status": "acknowledged", "alert_id": alert_id}
+            return {"id": alert_id, "status": "ack'd"}
     raise HTTPException(status_code=404, detail=f"Alert {alert_id!r} not found")
 
 
-@app.get("/metrics-snapshot")
+@app.get(
+    "/metrics-snapshot",
+    tags=["observability"],
+    summary="Fetch current Prometheus metrics snapshot",
+    responses={
+        200: {"description": "Latest Prometheus metrics for the target service"},
+    },
+)
 async def current_metrics():
     """
     Convenience endpoint: live Prometheus metric snapshot without needing an alert.
@@ -275,14 +431,19 @@ async def current_metrics():
     return await fetch_prometheus_snapshot()
 
 
-@app.get("/health")
+@app.get(
+    "/health",
+    tags=["observability"],
+    summary="Listener health check",
+    response_model=HealthResponse,
+    responses={200: {"description": "Listener is running and ready to receive alerts"}},
+)
 async def health():
     return {
         "status":           "ok",
         "service":          "aether-guard/listener",
-        "version":          "1.0.0",
-        "queue_size":       len(alert_queue),
-        "pending_alerts":   sum(1 for a in alert_queue if not a["processed_by_ai"]),
-        "docker_connected": _docker_client is not None,
-        "prometheus_url":   PROMETHEUS_URL,
+        "version":          "1.1.0",
+        "queue_depth":      len(alert_queue),
+        "unprocessed":      sum(1 for a in alert_queue if not a["processed_by_ai"]),
+        "docker_available": _docker_client is not None,
     }
