@@ -34,6 +34,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 
 from prompt import SYSTEM_PROMPT, build_user_prompt
+from postmortem import generate as generate_postmortem, save as save_postmortem
 from remediation import execute_action
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -54,6 +55,7 @@ CLAUDE_MODEL         = os.getenv("CLAUDE_MODEL",         "claude-sonnet-4-5-2025
 POLL_INTERVAL        = int(os.getenv("POLL_INTERVAL",    "10"))
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.60"))
 ANALYSIS_LOG_PATH    = Path(os.getenv("ANALYSIS_LOG_PATH", "/app/data/analyses.jsonl"))
+POSTMORTEM_DIR       = Path(os.getenv("POSTMORTEM_DIR",    "/app/data/postmortems"))
 DRY_RUN              = os.getenv("DRY_RUN", "false").lower() == "true"
 
 VALID_ACTIONS = {"RESTART", "SCALE", "ROLLBACK", "IGNORE"}
@@ -340,6 +342,17 @@ async def _poll_once(client: httpx.AsyncClient) -> int:
 
             analyses.append(analysis)
             persist_analysis(analysis)
+
+            # ── Phase 4: Auto-generate blameless post-mortem ──────────────
+            try:
+                pm_text = generate_postmortem(analysis)
+                pm_path = save_postmortem(pm_text, analysis, POSTMORTEM_DIR)
+                if pm_path:
+                    log.info("📄 Post-mortem written: %s", pm_path)
+                    analysis["postmortem_path"] = str(pm_path)
+            except Exception as pm_exc:
+                log.warning("Post-mortem generation failed: %s", pm_exc)
+
             _stats["alerts_processed"] += 1
             processed += 1
 
@@ -481,139 +494,66 @@ async def get_stats():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Phase 4: Post-Mortem generation
+# Phase 4: Post-Mortem endpoints
 # ─────────────────────────────────────────────────────────────────────────────
 
-_PM_SYSTEM = """\
-You are a Google SRE writing a blameless post-mortem for a production incident.
-Your audience is senior engineers doing a weekly post-mortem review.
-
-Rules:
-- Blameless: focus on systems and processes, never individuals.
-- Specific: cite exact metric values, timestamps, and log evidence.
-- Actionable: every lesson must translate to a concrete action item.
-- Concise: each section should be 2–5 sentences unless a timeline or table.
-
-Output ONLY the Markdown document — no preamble, no code fences.\
-"""
-
-def _build_pm_prompt(incident_analyses: list[dict]) -> str:
-    """Serialize incident analyses into a structured prompt for PM generation."""
-    first  = incident_analyses[0]
-    labels = first.get("alert_labels", {})
-
-    metric_lines = []
-    snap = first.get("metrics_snapshot") or {}
-    for k, v in snap.items():
-        metric_lines.append(f"  {k}: {v}")
-
-    remediation = first.get("remediation", {})
-    action_line = (
-        f"{remediation.get('action','N/A')} → {remediation.get('outcome','N/A')}: "
-        f"{remediation.get('reason','')}"
-        if remediation else "No remediation record"
-    )
-
-    return f"""\
-## Incident Data
-
-Alert Name   : {labels.get('alertname','unknown')}
-Severity     : {labels.get('severity','unknown')}
-SLO Impacted : {labels.get('slo','unknown')}
-Service      : {labels.get('service','target-service')}
-Started At   : {first.get('starts_at','unknown')}
-Analyzed At  : {first.get('analyzed_at','unknown')}
-
-## AI RCA Summary
-
-Root Cause   : {first.get('root_cause','N/A')}
-Confidence   : {first.get('confidence',0):.0%}
-Recommended Action: {first.get('action','N/A')}
-Reasoning    : {first.get('reasoning','N/A')}
-SLO Impact   : {first.get('slo_impact','N/A')}
-
-## Prometheus Metrics at Alert Time
-
-{chr(10).join(metric_lines) if metric_lines else '  (no snapshot)'}
-
-## Remediation Executed
-
-{action_line}
-
-## Log Evidence (excerpt)
-
-{chr(10).join((first.get('log_tail') or [])[-20:])}
-
-## Full Analysis
-
-{first.get('analysis','N/A')}
-
-## Task
-
-Write a complete blameless post-mortem with these sections:
-# Blameless Post-Mortem: [descriptive incident title]
-**Date:** [extracted from analyzed_at]
-**Status:** Complete — Closed
-**Severity:** [from alert]
-**Author:** Aether-Guard AI SRE Agent
-
-## Summary
-## Impact
-## Timeline (UTC)
-## Root Cause
-## Contributing Factors
-## Resolution
-## Lessons Learned
-### What Went Well
-### What Could Be Improved
-## Action Items (Toil Reduction)
-| Action | Priority | Owner |
-## Error Budget Impact
-"""
+@app.get("/postmortems")
+async def list_postmortems():
+    """List all saved post-mortem files, newest first."""
+    if not POSTMORTEM_DIR.exists():
+        return {"postmortems": [], "total": 0}
+    files = sorted(POSTMORTEM_DIR.glob("*.md"), reverse=True)
+    return {
+        "postmortems": [
+            {
+                "filename": f.name,
+                "path":     str(f),
+                "size_bytes": f.stat().st_size,
+                "created_at": datetime.fromtimestamp(f.stat().st_ctime, tz=timezone.utc).isoformat(),
+            }
+            for f in files
+        ],
+        "total": len(files),
+    }
 
 
-async def _generate_postmortem_text(incident_analyses: list[dict]) -> str:
-    """Call Claude to write the post-mortem narrative."""
-    client = get_claude()
-    prompt = _build_pm_prompt(incident_analyses)
-    response = await client.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=2048,
-        system=_PM_SYSTEM,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return response.content[0].text.strip()
+@app.get("/postmortems/{filename}")
+async def get_postmortem(filename: str):
+    """Read a saved post-mortem file by filename."""
+    # Prevent path traversal
+    safe = Path(filename).name
+    path = POSTMORTEM_DIR / safe
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail=f"Post-mortem {safe!r} not found.")
+    return {"filename": safe, "content": path.read_text(encoding="utf-8")}
 
 
-@app.post("/postmortem/{alert_id}")
-async def generate_postmortem(alert_id: str):
+@app.post("/postmortems/generate/{alert_id}")
+async def generate_postmortem_endpoint(alert_id: str):
     """
-    Generate a blameless post-mortem Markdown document for a specific alert.
-    Finds the analysis in the in-memory queue, calls Claude, writes file + returns text.
+    (Re-)generate a blameless post-mortem for a specific alert ID.
+    Uses the deterministic generator — no extra LLM call required.
     """
     incident = [a for a in analyses if a.get("alert_id") == alert_id]
     if not incident:
         raise HTTPException(status_code=404, detail=f"No analysis found for alert {alert_id!r}")
 
-    pm_text  = await _generate_postmortem_text(incident)
-    alertname = incident[0].get("alertname", "incident")
-    ts        = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    filename  = f"{ts}-{alertname}.md"
+    analysis = incident[-1]
+    pm_text  = generate_postmortem(analysis)
+    pm_path  = save_postmortem(pm_text, analysis, POSTMORTEM_DIR)
 
-    # Write to local file (persisted via volume in Docker).
-    pm_dir = Path("/app/data/postmortems")
-    pm_dir.mkdir(parents=True, exist_ok=True)
-    outpath = pm_dir / filename
-    outpath.write_text(pm_text, encoding="utf-8")
-    log.info("Post-mortem written: %s", outpath)
-
-    return {"filename": filename, "path": str(outpath), "content": pm_text}
+    return {
+        "filename": pm_path.name if pm_path else None,
+        "path":     str(pm_path) if pm_path else None,
+        "content":  pm_text,
+    }
 
 
-@app.get("/postmortem/latest")
-async def latest_postmortem():
-    """Generate a post-mortem for the most recently analyzed alert."""
+@app.get("/postmortems/latest/raw")
+async def latest_postmortem_raw():
+    """Return the most recently generated post-mortem, or generate one on demand."""
     if not analyses:
         raise HTTPException(status_code=404, detail="No analyses available yet.")
-    latest = analyses[-1]
-    return await generate_postmortem(latest["alert_id"])
+    analysis = analyses[-1]
+    pm_text  = generate_postmortem(analysis)
+    return {"content": pm_text, "alert_id": analysis.get("alert_id")}
