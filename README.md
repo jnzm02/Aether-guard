@@ -3,6 +3,7 @@
 > **Autonomous SRE AI Agent** — monitors a microservice, detects failures using Prometheus SLO burn-rate alerting, performs Root Cause Analysis with Claude AI, and executes automated remediation with blameless post-mortem generation.
 
 [![CI](https://github.com/jnzm02/Aether-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/jnzm02/Aether-guard/actions/workflows/ci.yml)
+[![CD](https://github.com/jnzm02/Aether-guard/actions/workflows/cd.yml/badge.svg)](https://github.com/jnzm02/Aether-guard/actions/workflows/cd.yml)
 ![Go](https://img.shields.io/badge/Go-1.21-00ADD8?logo=go)
 ![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python)
 ![Prometheus](https://img.shields.io/badge/Prometheus-2.48-E6522C?logo=prometheus)
@@ -338,6 +339,31 @@ python3 -m pytest services/agent/tests/ -v
 # Python listener — 14 tests (webhook, enrichment, queue)
 python3 -m pytest services/listener/tests/ --import-mode=importlib -v
 ```
+
+---
+
+## Production Deployment
+
+### DigitalOcean / VPS Deployment (Docker Compose)
+
+Automated CD pipeline via GitHub Actions for deploying to any VPS:
+
+```bash
+# 1. Run server setup script
+curl -fsSL https://raw.githubusercontent.com/YOUR_USERNAME/Aether-guard/main/scripts/setup-server.sh | sudo bash
+
+# 2. Configure GitHub Secrets (see docs/CD-SETUP-GUIDE.md)
+# 3. Trigger deployment via GitHub Actions UI
+```
+
+**Features:**
+- Zero-downtime rolling updates
+- Automatic health checks & rollback
+- Manual approval required
+- Docker image caching for fast builds
+- Backup & restore capabilities
+
+See [CD Setup Guide](docs/CD-SETUP-GUIDE.md) for detailed instructions.
 
 ---
 

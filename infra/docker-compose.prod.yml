@@ -1,0 +1,116 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Aether-Guard — Production Override
+#
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# This file overrides the base docker-compose.yml for production deployments:
+#   - Uses images from private registry instead of local builds
+#   - Adds resource limits
+#   - Configures logging drivers
+#   - Adds production-grade restart policies
+# ─────────────────────────────────────────────────────────────────────────────
+version: "3.9"
+
+services:
+  target-service:
+    image: ${DOCKER_REGISTRY}/aether-guard/target-service:${IMAGE_TAG:-latest}
+    build: null  # Disable local build in production
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        labels: "service,component"
+    restart: always
+
+  prometheus:
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: always
+
+  alertmanager:
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: always
+
+  listener:
+    image: ${DOCKER_REGISTRY}/aether-guard/listener:${IMAGE_TAG:-latest}
+    build: null  # Disable local build in production
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: always
+
+  agent:
+    image: ${DOCKER_REGISTRY}/aether-guard/agent:${IMAGE_TAG:-latest}
+    build: null  # Disable local build in production
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: always
+
+  grafana:
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: always
