@@ -27,3 +27,12 @@ services/agent/data/
 
 # ── OS ────────────────────────────────────────────────────────────────────────
 Thumbs.db
+
+# ── Personal setup guides (not for public repo) ───────────────────────────────
+CD_CONFIGURATION_COMPLETE.md
+CD_IMPLEMENTATION_SUMMARY.md
+HOW_TO_ADD_GITHUB_SECRETS.md
+PRODUCTION_SETUP.md
+QUICK_DEPLOY.md
+TELEGRAM_SETUP.md
+docs/CD-SETUP-GUIDE.md
