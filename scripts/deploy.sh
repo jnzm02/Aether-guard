@@ -100,29 +100,45 @@ pull_images() {
     log_info "Pulling Docker images with tag: ${IMAGE_TAG}..."
 
     # Source environment variables for registry credentials
+    log_info "Loading environment variables..."
     set -a
-    source "${ENV_FILE}"
+    source "${ENV_FILE}" || {
+        log_error "Failed to source environment file: ${ENV_FILE}"
+        return 1
+    }
     set +a
+    log_info "✅ Environment variables loaded"
 
-    cd "${DEPLOY_DIR}/infra"
+    log_info "Changing to infra directory..."
+    cd "${DEPLOY_DIR}/infra" || {
+        log_error "Failed to change directory to ${DEPLOY_DIR}/infra"
+        return 1
+    }
 
     # Update IMAGE_TAG in .env if needed
+    log_info "Updating IMAGE_TAG in .env file..."
     if grep -q "^IMAGE_TAG=" "${ENV_FILE}"; then
         sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=${IMAGE_TAG}/" "${ENV_FILE}"
     else
         echo "IMAGE_TAG=${IMAGE_TAG}" >> "${ENV_FILE}"
     fi
+    log_info "✅ IMAGE_TAG updated to: ${IMAGE_TAG}"
 
     # Use production override if it exists
     COMPOSE_FILES="-f docker-compose.yml"
     if [ -f "docker-compose.prod.yml" ]; then
         COMPOSE_FILES="-f docker-compose.yml -f docker-compose.prod.yml"
         log_info "Using production configuration override"
+    else
+        log_warn "No docker-compose.prod.yml found, using base configuration only"
     fi
 
-    # Pull images using the correct registry paths
-    docker compose ${COMPOSE_FILES} pull --quiet || {
+    # Pull images using the correct registry paths (remove --quiet to see progress)
+    log_info "Pulling images from registry..."
+    docker compose ${COMPOSE_FILES} pull || {
         log_error "Failed to pull images from registry"
+        log_error "Registry: ${DOCKER_REGISTRY}"
+        log_error "Compose files: ${COMPOSE_FILES}"
         return 1
     }
 
@@ -132,23 +148,34 @@ pull_images() {
 perform_rolling_update() {
     log_info "Performing rolling update..."
 
-    cd "${DEPLOY_DIR}/infra"
+    log_info "Changing to infra directory..."
+    cd "${DEPLOY_DIR}/infra" || {
+        log_error "Failed to change directory to ${DEPLOY_DIR}/infra"
+        return 1
+    }
 
     # Determine which compose files to use
     COMPOSE_FILES="-f docker-compose.yml"
     if [ -f "docker-compose.prod.yml" ]; then
         COMPOSE_FILES="-f docker-compose.yml -f docker-compose.prod.yml"
         log_info "Using production override configuration"
+    else
+        log_warn "No docker-compose.prod.yml found, using base configuration only"
     fi
 
     # Strategy: Update one service at a time to minimize downtime
     SERVICES=("target-service" "listener" "agent")
 
     for service in "${SERVICES[@]}"; do
+        log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         log_info "Updating ${service}..."
+        log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
         # Recreate the service with new image
-        docker compose ${COMPOSE_FILES} up -d --no-deps --force-recreate "${service}"
+        docker compose ${COMPOSE_FILES} up -d --no-deps --force-recreate "${service}" || {
+            log_error "Failed to recreate ${service}"
+            return 1
+        }
 
         # Wait for service to be healthy
         log_info "Waiting for ${service} to be healthy..."
@@ -157,6 +184,7 @@ perform_rolling_update() {
         # Check if service is running
         if ! docker compose ${COMPOSE_FILES} ps "${service}" | grep -q "Up"; then
             log_error "${service} failed to start"
+            docker compose ${COMPOSE_FILES} logs --tail=50 "${service}"
             return 1
         fi
 
@@ -164,8 +192,13 @@ perform_rolling_update() {
     done
 
     # Update observability stack (Prometheus, Alertmanager, Grafana)
+    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     log_info "Updating observability stack..."
-    docker compose ${COMPOSE_FILES} up -d --force-recreate prometheus alertmanager grafana
+    log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    docker compose ${COMPOSE_FILES} up -d --force-recreate prometheus alertmanager grafana || {
+        log_error "Failed to update observability stack"
+        return 1
+    }
 
     log_info "✅ Rolling update complete"
 }
@@ -266,21 +299,34 @@ show_deployment_summary() {
 }
 
 rollback() {
-    log_error "Deployment failed. Rolling back to previous state..."
+    log_error "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log_error "DEPLOYMENT FAILED - INITIATING AUTOMATIC ROLLBACK"
+    log_error "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-    cd "${DEPLOY_DIR}/infra"
+    cd "${DEPLOY_DIR}/infra" || {
+        log_error "Failed to change to infra directory during rollback"
+        exit 1
+    }
 
     # Restore backup .env
     if [ -f "${DEPLOY_DIR}/.env.backup" ]; then
         cp "${DEPLOY_DIR}/.env.backup" "${ENV_FILE}"
         log_info "✅ Restored previous .env"
+    else
+        log_warn "No .env backup found to restore"
     fi
 
     # Restart services with previous configuration
+    log_info "Stopping current containers..."
     docker compose down
+
+    log_info "Starting previous version..."
     docker compose up -d
 
-    log_info "✅ Rollback complete. Previous state restored."
+    log_error "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log_error "Rollback complete. System restored to previous state."
+    log_error "Check logs above to identify the failure cause."
+    log_error "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     exit 1
 }
 
