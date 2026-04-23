@@ -92,15 +92,37 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
 
+      - name: Create directory structure on server
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'ENDSSH'
+            mkdir -p /opt/aether-guard/{infra,scripts,backups,data}
+            mkdir -p /opt/aether-guard/infra/{prometheus,alertmanager,grafana}
+          ENDSSH
+
       - name: Copy deployment files to server
         run: |
-          scp -i ~/.ssh/deploy_key -r \
-            infra/docker-compose.yml \
-            infra/prometheus \
-            infra/alertmanager \
-            infra/grafana \
-            scripts/deploy.sh \
-            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/opt/aether-guard/
+          # Copy docker-compose files
+          scp -i ~/.ssh/deploy_key infra/docker-compose.yml \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/opt/aether-guard/infra/
+
+          scp -i ~/.ssh/deploy_key infra/docker-compose.prod.yml \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/opt/aether-guard/infra/
+
+          # Copy prometheus config
+          scp -i ~/.ssh/deploy_key -r infra/prometheus \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/opt/aether-guard/infra/
+
+          # Copy alertmanager config
+          scp -i ~/.ssh/deploy_key -r infra/alertmanager \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/opt/aether-guard/infra/
+
+          # Copy grafana config
+          scp -i ~/.ssh/deploy_key -r infra/grafana \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/opt/aether-guard/infra/
+
+          # Copy deployment script
+          scp -i ~/.ssh/deploy_key scripts/deploy.sh \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/opt/aether-guard/scripts/
 
       - name: Copy environment configuration
         run: |
