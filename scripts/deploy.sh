@@ -113,8 +113,18 @@ pull_images() {
         echo "IMAGE_TAG=${IMAGE_TAG}" >> "${ENV_FILE}"
     fi
 
-    # Pull images
-    docker compose pull --quiet
+    # Use production override if it exists
+    COMPOSE_FILES="-f docker-compose.yml"
+    if [ -f "docker-compose.prod.yml" ]; then
+        COMPOSE_FILES="-f docker-compose.yml -f docker-compose.prod.yml"
+        log_info "Using production configuration override"
+    fi
+
+    # Pull images using the correct registry paths
+    docker compose ${COMPOSE_FILES} pull --quiet || {
+        log_error "Failed to pull images from registry"
+        return 1
+    }
 
     log_info "✅ Images pulled successfully"
 }
@@ -124,10 +134,10 @@ perform_rolling_update() {
 
     cd "${DEPLOY_DIR}/infra"
 
-    # Use production override if it exists
-    COMPOSE_CMD="docker compose -f docker-compose.yml"
+    # Determine which compose files to use
+    COMPOSE_FILES="-f docker-compose.yml"
     if [ -f "docker-compose.prod.yml" ]; then
-        COMPOSE_CMD="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
+        COMPOSE_FILES="-f docker-compose.yml -f docker-compose.prod.yml"
         log_info "Using production override configuration"
     fi
 
@@ -138,14 +148,14 @@ perform_rolling_update() {
         log_info "Updating ${service}..."
 
         # Recreate the service with new image
-        ${COMPOSE_CMD} up -d --no-deps --force-recreate "${service}"
+        docker compose ${COMPOSE_FILES} up -d --no-deps --force-recreate "${service}"
 
         # Wait for service to be healthy
         log_info "Waiting for ${service} to be healthy..."
         sleep 10
 
         # Check if service is running
-        if ! ${COMPOSE_CMD} ps "${service}" | grep -q "Up"; then
+        if ! docker compose ${COMPOSE_FILES} ps "${service}" | grep -q "Up"; then
             log_error "${service} failed to start"
             return 1
         fi
@@ -155,7 +165,7 @@ perform_rolling_update() {
 
     # Update observability stack (Prometheus, Alertmanager, Grafana)
     log_info "Updating observability stack..."
-    ${COMPOSE_CMD} up -d --force-recreate prometheus alertmanager grafana
+    docker compose ${COMPOSE_FILES} up -d --force-recreate prometheus alertmanager grafana
 
     log_info "✅ Rolling update complete"
 }
@@ -165,12 +175,18 @@ verify_deployment() {
 
     cd "${DEPLOY_DIR}/infra"
 
+    # Determine which compose files to use
+    COMPOSE_FILES="-f docker-compose.yml"
+    if [ -f "docker-compose.prod.yml" ]; then
+        COMPOSE_FILES="-f docker-compose.yml -f docker-compose.prod.yml"
+    fi
+
     # Wait for all services to stabilize
     sleep 20
 
     # Check container status
     log_info "Container status:"
-    docker compose ps
+    docker compose ${COMPOSE_FILES} ps
 
     # Health check endpoints
     HEALTH_ENDPOINTS=(

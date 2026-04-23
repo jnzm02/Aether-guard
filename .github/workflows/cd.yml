@@ -28,6 +28,14 @@ jobs:
       image_tag: ${{ github.sha }}
 
     steps:
+      - name: Send Telegram notification - Deployment started
+        if: ${{ secrets.TELEGRAM_BOT_TOKEN != '' }}
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d parse_mode="Markdown" \
+            -d text="🚀 *Aether-Guard Deployment Started*%0A%0A📦 *Environment:* \`${{ github.event.inputs.environment }}\`%0A🔖 *Commit:* \`${GITHUB_SHA:0:7}\`%0A👤 *Triggered by:* ${{ github.actor }}%0A🔗 [View Workflow](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+
       - name: Checkout code
         uses: actions/checkout@v4
 
@@ -71,6 +79,22 @@ jobs:
             ${{ secrets.DOCKER_REGISTRY }}/aether-guard/agent:latest
           cache-from: type=registry,ref=${{ secrets.DOCKER_REGISTRY }}/aether-guard/agent:buildcache
           cache-to: type=registry,ref=${{ secrets.DOCKER_REGISTRY }}/aether-guard/agent:buildcache,mode=max
+
+      - name: Send Telegram notification - Build completed
+        if: ${{ success() && secrets.TELEGRAM_BOT_TOKEN != '' }}
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d parse_mode="Markdown" \
+            -d text="✅ *Build & Push Completed*%0A%0A📦 Images pushed to registry:%0A\`• target-service:${GITHUB_SHA:0:7}\`%0A\`• listener:${GITHUB_SHA:0:7}\`%0A\`• agent:${GITHUB_SHA:0:7}\`%0A%0A⏭️ Next: Deploying to server..."
+
+      - name: Send Telegram notification - Build failed
+        if: ${{ failure() && secrets.TELEGRAM_BOT_TOKEN != '' }}
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d parse_mode="Markdown" \
+            -d text="❌ *Build Failed*%0A%0A🔖 *Commit:* \`${GITHUB_SHA:0:7}\`%0A🔗 [View Logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
 
   # ── 2. Deploy to DigitalOcean Droplet via SSH ──────────────────────────────
   deploy:
@@ -172,6 +196,22 @@ jobs:
             echo "✅ All services are healthy!"
           EOF
 
+      - name: Send Telegram notification - Deployment succeeded
+        if: ${{ success() && secrets.TELEGRAM_BOT_TOKEN != '' }}
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d parse_mode="Markdown" \
+            -d text="🎉 *Deployment Successful!*%0A%0A✅ All services are healthy%0A🔖 *Version:* \`${GITHUB_SHA:0:7}\`%0A🌐 *Environment:* \`${{ github.event.inputs.environment }}\`%0A⏱️ *Duration:* $(( $(date +%s) - ${{ github.event.created_at }} ))s%0A%0A📊 [View Grafana](https://monitor.aether-guard.com)%0A🔗 [View Workflow](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+
+      - name: Send Telegram notification - Deployment failed
+        if: ${{ failure() && secrets.TELEGRAM_BOT_TOKEN != '' }}
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d parse_mode="Markdown" \
+            -d text="❌ *Deployment Failed*%0A%0A🔖 *Commit:* \`${GITHUB_SHA:0:7}\`%0A🌐 *Environment:* \`${{ github.event.inputs.environment }}\`%0A%0A🔧 Check logs and initiate rollback if needed%0A🔗 [View Logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+
       - name: Cleanup SSH key
         if: always()
         run: rm -f ~/.ssh/deploy_key
@@ -215,6 +255,14 @@ jobs:
             curl -sf "http://localhost:9090/api/v1/targets" | jq '.data.activeTargets[] | {job: .labels.job, health: .health}'
           EOF
 
+      - name: Send Telegram notification - Verification complete
+        if: ${{ success() && secrets.TELEGRAM_BOT_TOKEN != '' }}
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d parse_mode="Markdown" \
+            -d text="✅ *Verification Complete*%0A%0A📋 All containers running%0A📈 Prometheus targets healthy%0A💾 Disk space OK%0A%0A🚀 Deployment fully operational!"
+
       - name: Cleanup SSH key
         if: always()
         run: rm -f ~/.ssh/deploy_key
@@ -229,6 +277,14 @@ jobs:
       name: ${{ github.event.inputs.environment }}
 
     steps:
+      - name: Send Telegram notification - Rollback started
+        if: ${{ secrets.TELEGRAM_BOT_TOKEN != '' }}
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d parse_mode="Markdown" \
+            -d text="⚠️ *Automatic Rollback Initiated*%0A%0A🔖 *Failed commit:* \`${GITHUB_SHA:0:7}\`%0A⏪ Rolling back to previous version..."
+
       - name: Setup SSH key
         run: |
           mkdir -p ~/.ssh
@@ -257,6 +313,22 @@ jobs:
             echo "✅ Rollback complete. Verify services:"
             docker compose ps
           EOF
+
+      - name: Send Telegram notification - Rollback complete
+        if: ${{ success() && secrets.TELEGRAM_BOT_TOKEN != '' }}
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d parse_mode="Markdown" \
+            -d text="✅ *Rollback Successful*%0A%0A⏪ System restored to previous version%0A📋 Please review logs and investigate failure%0A🔗 [View Workflow](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+
+      - name: Send Telegram notification - Rollback failed
+        if: ${{ failure() && secrets.TELEGRAM_BOT_TOKEN != '' }}
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d parse_mode="Markdown" \
+            -d text="🚨 *CRITICAL: Rollback Failed*%0A%0A⚠️ Manual intervention required!%0A🔖 *Failed commit:* \`${GITHUB_SHA:0:7}\`%0A%0A🔧 SSH into server immediately%0A🔗 [View Logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
 
       - name: Cleanup SSH key
         if: always()
