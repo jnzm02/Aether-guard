@@ -17,14 +17,18 @@ Queue lifecycle:
 import asyncio
 import logging
 import os
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
 import docker
 import httpx
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
+
+from alert_summary import send_daily_summary
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Logging
@@ -41,8 +45,10 @@ log = logging.getLogger("aether-guard.listener")
 PROMETHEUS_URL     = os.getenv("PROMETHEUS_URL",     "http://prometheus:9090")
 TARGET_CONTAINER   = os.getenv("TARGET_CONTAINER",   "target-service")
 MAX_QUEUE_SIZE     = int(os.getenv("MAX_QUEUE_SIZE", "500"))
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID",   "")
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
 # App
 # ─────────────────────────────────────────────────────────────────────────────
 _LISTENER_DESCRIPTION = """
@@ -75,6 +81,39 @@ _LISTENER_TAGS = [
     },
 ]
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Cron scheduler for daily alert summary
+# 
+
+scheduler: AsyncIOScheduler | None = None
+
+
+async def send_daily_summary_job() -> None:
+    """Background job: send daily alert summary at 12:00 UTC."""
+    log.info("📊 Sending daily alert summary...")
+    await send_daily_summary(alert_queue, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)
+
+
+@asynccontextmanager
+async def lifespan(app_instance: FastAPI):
+    """Manage application lifecycle — start/stop scheduler."""
+    global scheduler
+
+    # Startup
+    scheduler = AsyncIOScheduler()
+    # Schedule job for 12:00 UTC daily
+    scheduler.add_job(send_daily_summary_job, "cron", hour=12, minute=0, second=0)
+    scheduler.start()
+    log.info("⏰ Daily summary scheduler started (12:00 UTC)")
+
+    yield  # App is running
+
+    # Shutdown
+    if scheduler and scheduler.running:
+        scheduler.shutdown()
+        log.info("⏰ Scheduler shutdown")
+
+
 app = FastAPI(
     title="Aether-Guard Alert Listener",
     description=_LISTENER_DESCRIPTION,
@@ -91,7 +130,9 @@ app = FastAPI(
 # Pydantic models
 # ─────────────────────────────────────────────────────────────────────────────
 
-class AlertLabel(BaseModel):
+class AlertLabel(BaseModel,
+    lifespan=lifespan,
+):
     alertname: str = Field(..., examples=["SLOErrorBudgetBurnCritical"])
     severity: str = Field(..., examples=["critical"])
     slo: str | None = Field(None, examples=["availability"])

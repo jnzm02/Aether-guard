@@ -109,6 +109,8 @@ services:
       - PROMETHEUS_URL=http://prometheus:9090
       - TARGET_CONTAINER=target-service
       - MAX_QUEUE_SIZE=500
+    env_file:
+      - ../.env
     volumes:
       # Mount Docker socket so the listener can fetch container logs.
       - /var/run/docker.sock:/var/run/docker.sock:ro
