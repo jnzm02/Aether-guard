@@ -6,7 +6,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY listener.py .
+COPY listener.py alert_summary.py .
 
 EXPOSE 8081
 
