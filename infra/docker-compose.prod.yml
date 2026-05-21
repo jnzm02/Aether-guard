@@ -81,6 +81,22 @@ services:
         max-file: "3"
     restart: always
 
+  redis:
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: always
+
   agent:
     image: ${DOCKER_REGISTRY}/aether-guard/agent:${IMAGE_TAG:-latest}
     build: null  # Disable local build in production

@@ -23,7 +23,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 log = logging.getLogger("aether-guard.remediation")
 
@@ -41,8 +41,24 @@ THRESHOLDS = {
 }
 
 # ── Cooldown tracker (prevents remediation storms) ─────────────────────────────
-_last_action_ts: dict[str, float] = {}   # container_name → epoch timestamp
 COOLDOWN_SECONDS = int(os.getenv("REMEDIATION_COOLDOWN_S", "300"))   # 5 min
+
+# V2: Redis-backed cooldown (replaces in-memory dict for multi-agent setups)
+_redis_client: Optional[Any] = None
+_last_action_ts: dict[str, float] = {}   # V1 fallback: in-memory dict
+
+try:
+    import redis as _redis_lib
+    REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    _redis_client = _redis_lib.from_url(REDIS_URL, decode_responses=True, socket_connect_timeout=2)
+    _redis_client.ping()
+    log.info("Remediation cooldown: Redis connected at %s", REDIS_URL)
+except Exception as _redis_exc:
+    _redis_client = None
+    log.warning(
+        "Remediation cooldown: Redis unavailable (%s) — falling back to in-memory dict",
+        _redis_exc,
+    )
 
 
 # ── Docker client ──────────────────────────────────────────────────────────────
@@ -77,6 +93,49 @@ class RemediationResult:
             "executed_at": self.executed_at,
             "details":     self.details,
         }
+
+
+# ── Cooldown helpers ──────────────────────────────────────────────────────────
+
+def _check_cooldown(container: str) -> tuple[bool, float]:
+    """
+    Check if container is in cooldown period.
+
+    Returns:
+        (in_cooldown, elapsed_seconds) — tuple indicating if cooldown is active
+    """
+    if _redis_client:
+        try:
+            key = f"cooldown:{container}"
+            ttl = _redis_client.ttl(key)
+            if ttl > 0:
+                # Key exists and has time remaining
+                elapsed = COOLDOWN_SECONDS - ttl
+                return (True, elapsed)
+            return (False, float("inf"))
+        except Exception as exc:
+            log.warning("Redis cooldown check failed (%s) — falling back to in-memory", exc)
+            # Fall through to in-memory fallback
+
+    # V1 fallback: in-memory dict
+    last = _last_action_ts.get(container, float("-inf"))
+    elapsed = time.monotonic() - last
+    return (elapsed < COOLDOWN_SECONDS, elapsed)
+
+
+def _set_cooldown(container: str) -> None:
+    """Record that an action was executed on container (sets cooldown)."""
+    if _redis_client:
+        try:
+            key = f"cooldown:{container}"
+            _redis_client.setex(key, COOLDOWN_SECONDS, "1")
+            return
+        except Exception as exc:
+            log.warning("Redis cooldown set failed (%s) — falling back to in-memory", exc)
+            # Fall through to in-memory fallback
+
+    # V1 fallback: in-memory dict
+    _last_action_ts[container] = time.monotonic()
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -115,22 +174,18 @@ def execute_action(action: str, analysis: dict) -> RemediationResult:
         )
 
     # ── Gate 2: cooldown ─────────────────────────────────────────────────────
-    # Default sentinel is -inf so that a container with NO prior action is
-    # treated as "infinitely long ago" — always passes the gate.
-    # Using 0.0 would falsely trigger cooldown on systems where
-    # time.monotonic() is small (e.g., fresh CI runners / new containers).
-    last = _last_action_ts.get(container, float("-inf"))
-    elapsed = time.monotonic() - last
-    if elapsed < COOLDOWN_SECONDS and action not in ("IGNORE",):
-        reason = (
-            f"Cooldown active: last action on {container!r} was "
-            f"{elapsed:.0f}s ago (cooldown={COOLDOWN_SECONDS}s)."
-        )
-        log.warning("Remediation skipped: %s", reason)
-        return RemediationResult(
-            action=action, executed=False, outcome="skipped",
-            reason=reason, container=container,
-        )
+    if action not in ("IGNORE",):
+        in_cooldown, elapsed = _check_cooldown(container)
+        if in_cooldown:
+            reason = (
+                f"Cooldown active: last action on {container!r} was "
+                f"{elapsed:.0f}s ago (cooldown={COOLDOWN_SECONDS}s)."
+            )
+            log.warning("Remediation skipped: %s", reason)
+            return RemediationResult(
+                action=action, executed=False, outcome="skipped",
+                reason=reason, container=container,
+            )
 
     # ── Gate 3: dry-run ──────────────────────────────────────────────────────
     if DRY_RUN:
@@ -151,7 +206,7 @@ def execute_action(action: str, analysis: dict) -> RemediationResult:
     handler = dispatch.get(action, _unknown)
     result  = handler(container, analysis)
     if result.executed:
-        _last_action_ts[container] = time.monotonic()
+        _set_cooldown(container)
 
     log.info(
         "Remediation complete  action=%s  outcome=%s  container=%s",

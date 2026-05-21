@@ -91,13 +91,30 @@ class AckRequest(BaseModel):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Logging
+# Logging (must be before V2 imports)
 # ─────────────────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
 )
 log = logging.getLogger("aether-guard.agent")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# V2 Architecture: Load hybrid RCA components
+# ─────────────────────────────────────────────────────────────────────────────
+V2_ENABLED = False
+_rule_engine = None
+_incident_recorder = None
+
+try:
+    from rules import RuleEngine
+    from policy import check_policy
+    from verification import VerificationEngine
+    V2_ENABLED = True
+    _rule_engine = RuleEngine()
+    log.info("✨ V2 components loaded: Hybrid RCA + Policy + Verification + Replay")
+except ImportError as e:
+    log.warning("⚠️  V2 components not available: %s — falling back to V1 behavior", e)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration
@@ -243,51 +260,101 @@ def _parse_and_validate(raw: str) -> dict[str, Any]:
 
 async def analyze_alert(alert: dict) -> dict[str, Any]:
     """
-    Full analysis pipeline for a single alert:
-      1. Build context prompt
-      2. Call Claude (with retry)
+    V2 Hybrid RCA pipeline for a single alert:
+      1. Try rule-based triage first (fast, deterministic)
+      2. If no rule matches or confidence <0.85 → LLM analysis
       3. Assemble enriched analysis record
+
+    V1 compatibility: Falls back to pure LLM if V2 components not available.
     """
     alert_id   = alert["id"]
     alertname  = alert.get("labels", {}).get("alertname", "unknown")
     log.info("Analyzing alert  id=%s  alertname=%s", alert_id, alertname)
 
-    user_prompt = build_user_prompt(alert)
-
     raw_analysis: dict[str, Any] | None = None
-    last_error: Exception | None = None
+    rca_method = "unknown"
 
-    for attempt in range(1, 4):
+    # ────────────────────────────────────────────────────────────────────────
+    # V2: Try rule-based triage first
+    # ────────────────────────────────────────────────────────────────────────
+    if V2_ENABLED and _rule_engine:
         try:
-            raw_analysis = await call_claude(user_prompt, attempt=attempt)
-            break
-        except ValueError as exc:
-            last_error = exc
-            log.warning("Parse attempt %d failed: %s", attempt, exc)
-            await asyncio.sleep(1)
-        except anthropic.RateLimitError as exc:
-            last_error = exc
-            wait = 30
-            log.warning("Rate limited — waiting %ds", wait)
-            await asyncio.sleep(wait)
-        except anthropic.APIError as exc:
-            last_error = exc
-            log.error("Claude API error (attempt %d): %s", attempt, exc)
-            _stats["api_errors"] += 1
-            await asyncio.sleep(5)
+            metrics = alert.get("prometheus_snapshot", {})
+            logs = alert.get("logs", [])
 
+            rule_match = _rule_engine.analyze(alert, metrics, logs)
+
+            if rule_match and rule_match.confidence >= 0.85:
+                log.info(
+                    "✓ Rule matched: %s (confidence %.2f) → %s",
+                    rule_match.rule_name,
+                    rule_match.confidence,
+                    rule_match.recommended_action,
+                )
+                raw_analysis = {
+                    "analysis": f"Pattern matched: {rule_match.rule_name}",
+                    "root_cause": rule_match.root_cause.value,
+                    "confidence": rule_match.confidence,
+                    "action": rule_match.recommended_action,
+                    "reasoning": rule_match.reasoning,
+                    "slo_impact": alert.get("annotations", {}).get("description", ""),
+                    "recommended_followup": "Monitor metrics post-remediation",
+                    "evidence": rule_match.evidence,
+                    "rule_name": rule_match.rule_name,
+                }
+                rca_method = "rule-based"
+            elif rule_match:
+                log.info(
+                    "⚠ Rule matched but confidence %.2f < 0.85: %s — escalating to LLM",
+                    rule_match.confidence,
+                    rule_match.rule_name,
+                )
+        except Exception as exc:
+            log.warning("Rule engine failed: %s — falling back to LLM", exc)
+
+    # ────────────────────────────────────────────────────────────────────────
+    # V1/V2: LLM analysis (fallback or primary path)
+    # ────────────────────────────────────────────────────────────────────────
     if raw_analysis is None:
-        # All attempts failed — produce a safe fallback record
-        log.error("All Claude attempts failed for alert %s: %s", alert_id, last_error)
-        raw_analysis = {
-            "analysis":             f"Agent failed to produce analysis after 3 attempts: {last_error}",
-            "root_cause":           "Unknown — analysis failed",
-            "confidence":           0.0,
-            "action":               "IGNORE",
-            "reasoning":            "Defaulting to IGNORE due to analysis failure.",
-            "slo_impact":           "unknown",
-            "recommended_followup": "Investigate manually — agent could not complete RCA.",
-        }
+        if V2_ENABLED:
+            log.info("⚡ No high-confidence rule match — using LLM analysis")
+        user_prompt = build_user_prompt(alert)
+
+        last_error: Exception | None = None
+
+        for attempt in range(1, 4):
+            try:
+                raw_analysis = await call_claude(user_prompt, attempt=attempt)
+                rca_method = "llm-assisted"
+                break
+            except ValueError as exc:
+                last_error = exc
+                log.warning("Parse attempt %d failed: %s", attempt, exc)
+                await asyncio.sleep(1)
+            except anthropic.RateLimitError as exc:
+                last_error = exc
+                wait = 30
+                log.warning("Rate limited — waiting %ds", wait)
+                await asyncio.sleep(wait)
+            except anthropic.APIError as exc:
+                last_error = exc
+                log.error("Claude API error (attempt %d): %s", attempt, exc)
+                _stats["api_errors"] += 1
+                await asyncio.sleep(5)
+
+        if raw_analysis is None:
+            # All attempts failed — produce a safe fallback record
+            log.error("All Claude attempts failed for alert %s: %s", alert_id, last_error)
+            raw_analysis = {
+                "analysis":             f"Agent failed to produce analysis after 3 attempts: {last_error}",
+                "root_cause":           "Unknown — analysis failed",
+                "confidence":           0.0,
+                "action":               "IGNORE",
+                "reasoning":            "Defaulting to IGNORE due to analysis failure.",
+                "slo_impact":           "unknown",
+                "recommended_followup": "Investigate manually — agent could not complete RCA.",
+            }
+            rca_method = "fallback-error"
 
     return {
         **raw_analysis,
@@ -298,6 +365,8 @@ async def analyze_alert(alert: dict) -> dict[str, Any]:
         "analyzed_at":   datetime.now(timezone.utc).isoformat(),
         "model":         CLAUDE_MODEL,
         "dry_run":       DRY_RUN,
+        "rca_method":    rca_method,  # NEW: Track which path was used
+        "v2_enabled":    V2_ENABLED,
     }
 
 
@@ -385,7 +454,65 @@ async def _poll_once(client: httpx.AsyncClient) -> int:
         try:
             analysis = await analyze_alert(alert)
 
-            # ── Phase 4: Execute remediation action ───────────────────────
+            # ────────────────────────────────────────────────────────────
+            # V2: Policy Gate - Check if action is allowed
+            # ────────────────────────────────────────────────────────────
+            if V2_ENABLED and analysis["action"] != "IGNORE":
+                try:
+                    severity = alert.get("labels", {}).get("severity", "warning")
+                    root_cause = analysis.get("root_cause", "unknown")
+
+                    policy_decision = check_policy(
+                        action=analysis["action"],
+                        alert_severity=severity,
+                        root_cause=root_cause,
+                    )
+
+                    if not policy_decision.allowed:
+                        log.warning(
+                            "❌ Policy violation: %s — overriding %s → IGNORE",
+                            policy_decision.reason,
+                            analysis["action"],
+                        )
+                        analysis["action"] = "IGNORE"
+                        analysis["reasoning"] += f"\n[Policy blocked: {policy_decision.reason}]"
+                        analysis["policy_blocked"] = True
+
+                    elif policy_decision.requires_approval:
+                        log.warning(
+                            "⏸️  High-risk action %s requires approval (%s) — proceeding in 5s for demo",
+                            analysis["action"],
+                            policy_decision.risk_level.name,
+                        )
+                        await asyncio.sleep(5)
+                        analysis["approval_required"] = True
+                        analysis["approval_status"] = "auto-approved-demo"
+
+                    analysis["policy_decision"] = {
+                        "allowed": policy_decision.allowed,
+                        "risk_level": policy_decision.risk_level.name,
+                        "requires_approval": policy_decision.requires_approval,
+                        "reason": policy_decision.reason,
+                    }
+
+                except Exception as policy_exc:
+                    log.warning("Policy engine failed: %s — allowing action", policy_exc)
+
+            # ────────────────────────────────────────────────────────────
+            # V2: Capture metrics BEFORE remediation (for verification)
+            # ────────────────────────────────────────────────────────────
+            metrics_before = None
+            if V2_ENABLED and analysis["action"] != "IGNORE":
+                try:
+                    async with VerificationEngine() as verifier:
+                        metrics_before = await verifier.capture_snapshot()
+                        log.info("📊 Captured metrics snapshot before remediation")
+                except Exception as verify_exc:
+                    log.warning("Metric capture failed: %s — proceeding without verification", verify_exc)
+
+            # ────────────────────────────────────────────────────────────
+            # Execute remediation action
+            # ────────────────────────────────────────────────────────────
             remediation = execute_action(analysis["action"], analysis)
             analysis["remediation"] = remediation.as_dict()
             log.info(
@@ -393,10 +520,55 @@ async def _poll_once(client: httpx.AsyncClient) -> int:
                 remediation.action, remediation.outcome, remediation.container,
             )
 
+            # ────────────────────────────────────────────────────────────
+            # V2: Verify remediation outcome (did metrics improve?)
+            # ────────────────────────────────────────────────────────────
+            if V2_ENABLED and metrics_before and remediation.executed:
+                try:
+                    async with VerificationEngine() as verifier:
+                        alert_type = alert.get("labels", {}).get("alertname", "")
+                        verification = await verifier.verify(
+                            metrics_before=metrics_before,
+                            alert_type=alert_type,
+                            wait_seconds=120,
+                        )
+
+                        analysis["verification"] = {
+                            "success": verification.success,
+                            "improved": verification.improved,
+                            "reason": verification.reason,
+                            "should_rollback": verification.should_rollback,
+                            "metrics_before": {
+                                "error_rate": metrics_before.error_rate_5m,
+                                "p99_latency": metrics_before.latency_p99_5m,
+                            },
+                            "metrics_after": {
+                                "error_rate": verification.metrics_after.error_rate_5m,
+                                "p99_latency": verification.metrics_after.latency_p99_5m,
+                            },
+                        }
+
+                        if verification.should_rollback:
+                            log.error(
+                                "❌ Verification failed: %s — executing auto-rollback",
+                                verification.reason,
+                            )
+                            rollback_result = execute_action("ROLLBACK", analysis)
+                            analysis["auto_rollback"] = rollback_result.as_dict()
+                            log.info("🔄 Auto-rollback executed: %s", rollback_result.outcome)
+                        else:
+                            log.info("✅ Verification successful: %s", verification.reason)
+
+                except Exception as verify_exc:
+                    log.error("Verification failed: %s", verify_exc)
+                    analysis["verification_error"] = str(verify_exc)
+
             analyses.append(analysis)
             persist_analysis(analysis)
 
-            # ── Phase 4: Auto-generate blameless post-mortem ──────────────
+            # ────────────────────────────────────────────────────────────
+            # Auto-generate blameless post-mortem
+            # ────────────────────────────────────────────────────────────
             try:
                 pm_text = generate_postmortem(analysis)
                 pm_path = save_postmortem(pm_text, analysis, POSTMORTEM_DIR)
@@ -410,10 +582,11 @@ async def _poll_once(client: httpx.AsyncClient) -> int:
             processed += 1
 
             log.info(
-                "✅ Analysis complete  alertname=%s  action=%s  confidence=%.2f",
+                "✅ Analysis complete  alertname=%s  action=%s  confidence=%.2f  rca_method=%s",
                 analysis["alertname"],
                 analysis["action"],
                 analysis["confidence"],
+                analysis.get("rca_method", "unknown"),
             )
 
             if not DRY_RUN:
