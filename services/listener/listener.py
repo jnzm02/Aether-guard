@@ -124,15 +124,14 @@ app = FastAPI(
     },
     license_info={"name": "MIT"},
     openapi_tags=_LISTENER_TAGS,
+    lifespan=lifespan,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pydantic models
 # ─────────────────────────────────────────────────────────────────────────────
 
-class AlertLabel(BaseModel,
-    lifespan=lifespan,
-):
+class AlertLabel(BaseModel):
     alertname: str = Field(..., examples=["SLOErrorBudgetBurnCritical"])
     severity: str = Field(..., examples=["critical"])
     slo: str | None = Field(None, examples=["availability"])
