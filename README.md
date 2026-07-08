@@ -10,7 +10,7 @@
 ![Claude](https://img.shields.io/badge/Claude-Sonnet_4.5-8A2BE2)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker)
 ![Kubernetes](https://img.shields.io/badge/Kubernetes-Ready-326CE5?logo=kubernetes)
-![Tests](https://img.shields.io/badge/Tests-110_Passing-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-253_Passing-brightgreen)
 
 ---
 
@@ -26,8 +26,10 @@
 | **Reliability** | Fails if Claude API down | **Works offline** (rules layer) |
 | **Observability** | Basic logging | **Full telemetry** (rca_method tracking) |
 | **Multi-Agent** | In-memory state | **Redis-backed** (distributed safe) |
-| **Tests** | 81 tests | **110 tests** (100% passing) |
+| **Tests** | 81 tests | **253 tests** (100% passing) |
 | **Verification** | None | **Auto-rollback** if metrics don't improve |
+| **Incident Storage** | None | **Postgres + Redis** (queryable analytics) |
+| **Trust Metrics** | None | **Override tracking** (human feedback loop) |
 
 ---
 
@@ -199,12 +201,23 @@ aether-guard/
 │       ├── policy.py            # 🛡️ Action gating + risk assessment
 │       ├── verification.py      # ✅ Post-remediation validation + rollback
 │       ├── replay.py            # 📊 Incident replay framework
+│       ├── trend_analysis.py    # 📈 Time-series trend detection (Priority 3)
+│       ├── enrichment.py        # 🔍 Metric enrichment (Prometheus queries)
 │       │
-│       └── tests/               # 🧪 110 pytest unit tests (100% passing)
-│           ├── test_policy.py       # 41 tests (policy matrix, time gates)
-│           ├── test_verification.py # 29 tests (metric validation, rollback)
-│           ├── test_rules.py        # 40 tests (all 7 rule patterns)
-│           └── ...                  # Legacy tests (parse, remediation)
+│       │ ── Priority 2: Trust Metrics & Analytics ──────────
+│       ├── incident_report.py   # 📊 Structured incident reports (5 outcome categories)
+│       ├── incident_storage.py  # 💾 Postgres + Redis persistence layer
+│       ├── metrics.py           # 📉 Prometheus exporter (trust metrics)
+│       │
+│       └── tests/               # 🧪 253 pytest unit tests (100% passing)
+│           ├── test_policy.py           # 41 tests (policy matrix, time gates)
+│           ├── test_verification.py     # 29 tests (metric validation, rollback)
+│           ├── test_rules.py            # 40 tests (all 7 rule patterns)
+│           ├── test_incident_report.py  # 23 tests (Priority 2: outcome taxonomy)
+│           ├── test_override.py         # 35 tests (Priority 2: human overrides)
+│           ├── test_goroutine_leak.py   # 46 tests (Priority 3: leak detection)
+│           ├── test_remediation.py      # 32 tests (cooldown, Redis fallback)
+│           └── test_webhook.py          # 7 tests (listener integration)
 │
 ├── infra/
 │   ├── docker-compose.yml       # Full 7-service stack (+ Redis)
@@ -237,6 +250,7 @@ aether-guard/
 ├── scripts/
 │   ├── load_gen.py              # Traffic generator with chaos scenarios
 │   ├── generate_postmortem.py  # Standalone post-mortem CLI
+│   ├── trigger_incidents.sh     # Test incident generator (OOM, 503, goroutine leak, etc.)
 │   └── deploy.sh                # Production deployment script
 ├── postmortems/                 # Auto-generated blameless post-mortems
 ├── .github/workflows/
@@ -293,6 +307,8 @@ make health-check   # checks all /health endpoints
 
 ## Demo: End-to-End Chaos → Hybrid RCA → Remediation
 
+### Option 1: Using Chaos Endpoints
+
 ```bash
 # Terminal 1 — watch the agent's decision stream
 make agent-logs
@@ -311,6 +327,32 @@ make chaos-latency      # add 2s delay → Policy blocks forbidden action 🛡�
 make agent-analyses     # view AI RCA decisions with rca_method field
 make postmortem-latest  # read generated blameless post-mortem
 make chaos-reset        # restore healthy state
+```
+
+### Option 2: Using Test Incident Script (Recommended for Quick Testing)
+
+```bash
+# Terminal 1 — watch agent logs
+docker compose -f infra/docker-compose.yml logs -f agent
+
+# Terminal 2 — trigger test scenarios
+./scripts/trigger_incidents.sh
+
+# This sends 5 different alert types to Alertmanager:
+#   1. HighMemoryUsage (OOM scenario)
+#   2. HighErrorRate (Rate limit 503)
+#   3. DatabaseConnectionPoolExhausted
+#   4. DiskSpaceCritical
+#   5. HighGoroutineCount (Goroutine leak - Priority 3)
+
+# Query incidents via API
+curl http://localhost:8082/incidents | jq
+
+# View trust metrics (Priority 2)
+curl http://localhost:8082/trust-metrics | jq
+
+# Check override tracking
+curl http://localhost:8082/incidents/{incident_id} | jq
 ```
 
 ### Example V2 Rule-Based Output (⚡ 35μs)
@@ -426,30 +468,45 @@ Plus:
 
 ## Testing
 
-**110 tests** across Go and Python, all running in CI and **100% passing**.
+**253 tests** across Go and Python, all running in CI and **100% passing**.
 
 ```bash
 # Go — 23 tests (chaos, handlers, metrics)
 cd services/target-service && go test -race ./...
 
-# Python agent — 110 tests total
+# Python agent — 253 tests total
 python3 -m pytest services/agent/tests/ -v
 
-# Breakdown:
-#   test_policy.py:        41 tests  (policy matrix, time gates, approval logic)
-#   test_verification.py:  29 tests  (metric validation, rollback decisions)
-#   test_rules.py:         40 tests  (all 7 rule patterns, confidence scoring)
+# Breakdown by priority:
+#   V2 Core (110 tests):
+#     test_policy.py:        41 tests  (policy matrix, time gates, approval logic)
+#     test_verification.py:  29 tests  (metric validation, rollback decisions)
+#     test_rules.py:         40 tests  (all 7 rule patterns, confidence scoring)
+#
+#   Priority 2 — Trust Metrics (58 tests):
+#     test_incident_report.py:  23 tests  (outcome taxonomy, duration calculation)
+#     test_override.py:         35 tests  (human override tracking, trust metrics)
+#
+#   Priority 3 — Goroutine Detection (46 tests):
+#     test_goroutine_leak.py:   46 tests  (trend analysis, false positive guards)
+#
+#   Infrastructure (39 tests):
+#     test_remediation.py:      32 tests  (cooldown, Redis fallback, in-memory mode)
+#     test_webhook.py:           7 tests  (listener webhook integration)
 
 # Python listener — 14 tests (webhook, enrichment, queue)
 python3 -m pytest services/listener/tests/ --import-mode=importlib -v
-``` 
+```
 
 **Test Coverage:**
-- ✅ All 7 rule patterns (OOM kill, restart loop, memory leak, CPU saturation, traffic spike, dependency failure, bad deployment)
+- ✅ All 8 rule patterns (OOM kill, restart loop, memory leak, CPU saturation, traffic spike, dependency failure, bad deployment, **goroutine leak**)
 - ✅ Policy matrix (50+ action/root_cause combinations)
 - ✅ Time-of-day gating (business hours boundary tests)
 - ✅ Verification thresholds (error rate ≥50% improvement, latency ≥30% improvement)
 - ✅ Auto-rollback logic (metrics degraded scenarios)
+- ✅ **Incident storage** (Postgres + Redis dual-write, 48h TTL)
+- ✅ **Override tracking** (manual reversal, manual escalation, trust metrics computation)
+- ✅ **Trend analysis** (goroutine leak detection, confidence boosters, false positive guards)
 
 ---
 
@@ -502,7 +559,7 @@ See [`k8s/README.md`](k8s/README.md) for full instructions, NodePort mapping, an
 
 ---
 
-## V2 Rule Patterns (7 Deterministic Patterns)
+## V2 Rule Patterns (8 Deterministic Patterns)
 
 | Pattern | Confidence | Signals | Action | MTTR |
 |---------|-----------|---------|--------|------|
@@ -514,6 +571,9 @@ See [`k8s/README.md`](k8s/README.md) for full instructions, NodePort mapping, an
 | **TRAFFIC_SPIKE** | 0.87 | Traffic spike + errors or latency | SCALE | 45μs |
 | **DEPENDENCY_FAILURE** | 0.75 | Connection refused/timeout/DNS errors | RESTART | 52μs |
 | **BAD_DEPLOYMENT** | 0.78 | High errors + recent alert + startup failures | ROLLBACK | 58μs |
+| **GOROUTINE_LEAK** (Priority 3) | 0.85 | Rising goroutine count + elevated absolute count + high R² | RESTART | 41μs |
+
+**Priority 3 Enhancement**: Goroutine leak detection uses time-series trend analysis with confidence boosters (heap correlation, log warnings, traffic exclusion) to distinguish real leaks from load-driven increases.
 
 **Fallback to LLM**: Any incident with <0.85 confidence or no pattern match escalates to Claude (2-5s response time).
 
@@ -557,28 +617,46 @@ Each runbook: thresholds → mitigation commands → PromQL investigation → es
 - [x] Policy engine for action gating
 - [x] Verification engine with auto-rollback
 - [x] Redis for distributed state
-- [x] 110 comprehensive unit tests (100% passing)
+- [x] 253 comprehensive unit tests (100% passing)
 - [x] Incident replay framework
 - [x] CI/CD pipeline (all tests passing)
 
+### ✅ Completed (Priority 2: Trust Metrics & Analytics)
+- [x] Structured incident reports with 5 outcome categories
+- [x] Postgres + Redis dual-layer storage (long-term + fast access)
+- [x] Override tracking (manual reversal, manual escalation)
+- [x] Trust metrics API (by pattern, by outcome, override rates)
+- [x] Prometheus metrics export (incidents, overrides, outcomes)
+- [x] 58 comprehensive tests (incident reports + overrides)
+
+### ✅ Completed (Priority 3: Goroutine Leak Detection)
+- [x] Time-series trend analysis (linear regression, R² confidence)
+- [x] Goroutine leak pattern with confidence boosters
+- [x] False positive guards (load-driven vs real leak)
+- [x] Heap correlation analysis
+- [x] Log warning detection (goroutine/deadlock keywords)
+- [x] Traffic spike exclusion
+- [x] 46 comprehensive tests (true positives, false positive guards, edge cases)
+
 ### 🚧 In Progress
 - [ ] Slack integration for approval workflow (currently 5s demo delay)
-- [ ] Prometheus metrics export (rca_method, policy_decision counters)
-- [ ] Grafana V2 dashboard (rule vs LLM breakdown, cost tracking)
+- [ ] Grafana V2 dashboard (rule vs LLM breakdown, cost tracking, trust metrics visualization)
 
 ### 🔮 Future (Phase 2)
 - [ ] **Enhanced Observability**
-  - [ ] Real-time RCA method distribution dashboard
-  - [ ] Cost tracking (LLM API calls)
-  - [ ] Policy decision metrics (allowed/blocked/approval)
+  - [ ] Grafana dashboards for trust metrics (override rates, outcome breakdown)
+  - [ ] Real-time trend analysis visualization
+  - [ ] Cost tracking (LLM API calls vs rule matches)
 - [ ] **Evaluation Framework**
   - [ ] Golden dataset collection (50-100 incidents)
   - [ ] Replay testing CLI (`python -m agent.replay --replay-all`)
   - [ ] Accuracy reports (action accuracy, root cause accuracy)
+  - [ ] Trust metric calibration (use override data to tune confidence thresholds)
 - [ ] **Advanced Rules**
-  - [ ] Expand from 7 to 15+ patterns
-  - [ ] Adaptive confidence scoring (learn from verification outcomes)
+  - [ ] Expand from 8 to 15+ patterns (connection leak, circuit breaker open, etc.)
+  - [ ] Adaptive confidence scoring (learn from verification outcomes + override data)
   - [ ] Context-aware rules (time-of-day, deployment correlation)
+  - [ ] More Go-specific patterns (channel deadlock, GC pressure)
 - [ ] **C++ Sidecar (Experimental)**
   - [ ] eBPF-based monitoring (sub-100μs overhead)
   - [ ] gRPC inference bridge (vLLM/Ollama)
