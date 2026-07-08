@@ -102,22 +102,29 @@ def _check_cooldown(container: str) -> tuple[bool, float]:
     Check if container is in cooldown period.
 
     Returns:
-        (in_cooldown, elapsed_seconds) — tuple indicating if cooldown is active
+        (in_cool_, elapsed_seconds) — tuple indicating if cooldown is active
+
+    Logic:
+        1. If Redis available and key exists with TTL > 0 → return True (in cooldown)
+        2. If Redis fails (connection error) OR key doesn't exist → fall back to in-memory dict
+        3. In-memory dict is the source of truth if Redis unavailable or out of sync
     """
     if _redis_client:
         try:
             key = f"cooldown:{container}"
             ttl = _redis_client.ttl(key)
             if ttl > 0:
-                # Key exists and has time remaining
+                # Key exists and has time remaining → Redis cooldown active
                 elapsed = COOLDOWN_SECONDS - ttl
                 return (True, elapsed)
-            return (False, float("inf"))
+            # Key doesn't exist in Redis (ttl=-2) or expired (ttl=-1)
+            # Don't return early — fall through to check in-memory dict as well
+            # (Redis may be out of sync with in-memory state during agent restart/failover)
         except Exception as exc:
             log.warning("Redis cooldown check failed (%s) — falling back to in-memory", exc)
             # Fall through to in-memory fallback
 
-    # V1 fallback: in-memory dict
+    # V1 fallback / Redis miss: check in-memory dict
     last = _last_action_ts.get(container, float("-inf"))
     elapsed = time.monotonic() - last
     return (elapsed < COOLDOWN_SECONDS, elapsed)

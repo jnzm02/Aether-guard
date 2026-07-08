@@ -103,12 +103,17 @@ class TestCooldownGate:
         # Temporarily disable dry-run so we can hit gate 2.
         os.environ["DRY_RUN"] = "false"
         remediation.DRY_RUN = False
+        # Disable Redis to test in-memory fallback (avoid Redis connection attempts)
+        self._original_redis_client = remediation._redis_client
+        remediation._redis_client = None
 
     def teardown_method(self):
         # Restore dry-run after each test.
         os.environ["DRY_RUN"] = "true"
         remediation.DRY_RUN = True
         remediation._last_action_ts.clear()
+        # Restore Redis client
+        remediation._redis_client = self._original_redis_client
 
     def test_second_action_within_cooldown_is_skipped(self):
         container = remediation.TARGET_CONTAINER
@@ -135,6 +140,37 @@ class TestCooldownGate:
         # IGNORE should never be blocked by cooldown.
         result = execute_action("IGNORE", make_analysis("IGNORE", 0.95))
         assert result.outcome != "skipped"
+
+    def test_redis_miss_falls_back_to_in_memory(self):
+        """
+        Scenario: Redis client exists but key doesn't exist in Redis (TTL=-2).
+        In-memory dict has recent timestamp.
+        Expected: Cooldown check should fall through to in-memory dict and block the action.
+
+        This tests the bug fix: previously, line 115 returned (False, inf) when Redis
+        key didn't exist, bypassing the in-memory fallback entirely.
+        """
+        from unittest.mock import MagicMock
+
+        container = remediation.TARGET_CONTAINER
+
+        # Restore Redis client (if it was None from setup_method)
+        if remediation._redis_client is None:
+            # Create a mock Redis client that returns TTL=-2 (key doesn't exist)
+            mock_redis = MagicMock()
+            mock_redis.ttl.return_value = -2  # Key doesn't exist in Redis
+            remediation._redis_client = mock_redis
+
+        # Set in-memory cooldown (recent action)
+        remediation._last_action_ts[container] = time.monotonic()
+
+        # Execute action - should be blocked by in-memory cooldown
+        result = execute_action("RESTART", make_analysis("RESTART", 0.95))
+        assert result.outcome == "skipped", (
+            f"Expected cooldown to block action (in-memory fallback), "
+            f"but got outcome={result.outcome!r}"
+        )
+        assert "Cooldown" in result.reason
 
 
 # ─────────────────────────────────────────────────────────────────────────────

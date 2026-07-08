@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from incident_report import build_report, render_summary_table
+
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 _VERSION = "1.1.0"
@@ -75,8 +77,19 @@ def generate(analysis: dict[str, Any]) -> str:
     except (TypeError, ValueError):
         analysis["confidence"] = 0.0
 
-    return "\n\n".join([
+    # Priority 1: Generate structured incident summary table
+    incident_summary = ""
+    try:
+        incident_report = build_report(analysis)
+        incident_summary = render_summary_table(incident_report)
+    except Exception as e:
+        # Gracefully degrade if incident report generation fails
+        # (e.g., during transition period or if analysis dict is malformed)
+        incident_summary = f"<!-- Incident summary not available: {e} -->"
+
+    sections = [
         _header(analysis),
+        incident_summary,  # Add incident summary table after header
         _summary_section(analysis),
         _impact_section(analysis),
         _timeline_section(analysis),
@@ -88,7 +101,9 @@ def generate(analysis: dict[str, Any]) -> str:
         _action_items_section(analysis),
         _error_budget_section(analysis),
         _footer(analysis),
-    ])
+    ]
+
+    return "\n\n".join(sections)
 
 
 def save(text: str, analysis: dict[str, Any], output_dir: Path) -> Path:
