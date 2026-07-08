@@ -40,6 +40,7 @@ class RootCauseCategory(Enum):
     DEPENDENCY_FAILURE = "dependency_failure"
     BAD_DEPLOYMENT = "bad_deployment"
     TRAFFIC_SPIKE = "traffic_spike"
+    GOROUTINE_LEAK = "goroutine_leak"
     UNKNOWN = "unknown"
 
 
@@ -86,6 +87,11 @@ class PolicyEngine:
 
         # Dependency failures → RESTART to clear connection pools
         ("warning", RootCauseCategory.DEPENDENCY_FAILURE, ActionType.RESTART): (True, RiskLevel.LOW),
+
+        # Goroutine leaks → RESTART to terminate leaked goroutines
+        ("warning", RootCauseCategory.GOROUTINE_LEAK, ActionType.RESTART): (True, RiskLevel.LOW),
+        ("critical", RootCauseCategory.GOROUTINE_LEAK, ActionType.RESTART): (True, RiskLevel.MEDIUM),
+        ("warning", RootCauseCategory.GOROUTINE_LEAK, ActionType.SCALE): (False, None),  # Forbidden
 
         # Unknown causes → very conservative (IGNORE only by default)
         ("warning", RootCauseCategory.UNKNOWN, ActionType.IGNORE): (True, RiskLevel.LOW),

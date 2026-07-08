@@ -47,14 +47,15 @@ def empty_logs():
 class TestOOMKillRule:
     """Test OOM kill detection (confidence 0.95)."""
 
-    def test_oom_kill_detected(self, engine, empty_alert, empty_metrics):
+    @pytest.mark.asyncio
+    async def test_oom_kill_detected(self, engine, empty_alert, empty_metrics):
         """OOM kill message in logs → matched with 0.95 confidence."""
         logs = [
             "2024-01-15 10:00:00 INFO Application starting",
             "2024-01-15 10:05:00 ERROR Out of memory: Kill process 1234",
             "2024-01-15 10:05:01 ERROR Container terminated",
         ]
-        result = engine.analyze(empty_alert, empty_metrics, logs)
+        result = await engine.analyze(empty_alert, empty_metrics, logs)
 
         assert result is not None
         assert result.matched is True
@@ -65,7 +66,8 @@ class TestOOMKillRule:
         assert len(result.evidence) > 0
         assert "Out of memory" in result.evidence[0]
 
-    def test_oom_kill_variant_patterns(self, engine, empty_alert, empty_metrics):
+    @pytest.mark.asyncio
+    async def test_oom_kill_variant_patterns(self, engine, empty_alert, empty_metrics):
         """Different OOM kill message variants should all match."""
         log_variants = [
             ["oom-kill event detected"],
@@ -73,18 +75,19 @@ class TestOOMKillRule:
             ["Memory cgroup out of memory: OOM"],
         ]
         for logs in log_variants:
-            result = engine.analyze(empty_alert, empty_metrics, logs)
+            result = await engine.analyze(empty_alert, empty_metrics, logs)
             assert result is not None
             assert result.rule_name == "OOM_KILL"
             assert result.confidence == 0.95
 
-    def test_no_oom_kill(self, engine, empty_alert, empty_metrics):
+    @pytest.mark.asyncio
+    async def test_no_oom_kill(self, engine, empty_alert, empty_metrics):
         """Normal logs without OOM → no match."""
         logs = [
             "2024-01-15 10:00:00 INFO Application starting",
             "2024-01-15 10:05:00 INFO Processing request",
         ]
-        result = engine.analyze(empty_alert, empty_metrics, logs)
+        result = await engine.analyze(empty_alert, empty_metrics, logs)
         assert result is None  # No rule matched, escalates to LLM
 
 
@@ -93,7 +96,8 @@ class TestOOMKillRule:
 class TestRestartLoopRule:
     """Test restart loop detection (confidence 0.92)."""
 
-    def test_restart_loop_detected(self, engine, empty_alert, empty_metrics):
+    @pytest.mark.asyncio
+    async def test_restart_loop_detected(self, engine, empty_alert, empty_metrics):
         """Multiple restart events → matched with 0.92 confidence."""
         logs = [
             "2024-01-15 10:00:00 Starting server on port 8080",
@@ -102,7 +106,7 @@ class TestRestartLoopRule:
             "2024-01-15 10:00:15 Starting server on port 8080",
             "2024-01-15 10:00:20 Listening on port 8080",
         ]
-        result = engine.analyze(empty_alert, empty_metrics, logs)
+        result = await engine.analyze(empty_alert, empty_metrics, logs)
 
         assert result is not None
         assert result.rule_name == "RESTART_LOOP"
@@ -111,23 +115,25 @@ class TestRestartLoopRule:
         assert result.recommended_action == "ROLLBACK"
         assert "restart" in result.reasoning.lower()
 
-    def test_restart_loop_threshold(self, engine, empty_alert, empty_metrics):
+    @pytest.mark.asyncio
+    async def test_restart_loop_threshold(self, engine, empty_alert, empty_metrics):
         """Fewer than 3 restarts → no match."""
         logs = [
             "2024-01-15 10:00:00 Starting server on port 8080",
             "2024-01-15 10:00:05 Listening on port 8080",
         ]
-        result = engine.analyze(empty_alert, empty_metrics, logs)
+        result = await engine.analyze(empty_alert, empty_metrics, logs)
         assert result is None  # Not enough restarts to trigger rule
 
-    def test_restart_loop_exactly_3_restarts(self, engine, empty_alert, empty_metrics):
+    @pytest.mark.asyncio
+    async def test_restart_loop_exactly_3_restarts(self, engine, empty_alert, empty_metrics):
         """Exactly 3 restart indicators → match."""
         logs = [
             "Starting server on port 8080",
             "Listening on port 8080",
             "Container started successfully",
         ]
-        result = engine.analyze(empty_alert, empty_metrics, logs)
+        result = await engine.analyze(empty_alert, empty_metrics, logs)
         assert result is not None
         assert result.rule_name == "RESTART_LOOP"
 
@@ -137,7 +143,8 @@ class TestRestartLoopRule:
 class TestMemoryLeakRule:
     """Test memory leak detection (confidence 0.88)."""
 
-    def test_memory_leak_detected(self, engine, empty_logs):
+    @pytest.mark.asyncio
+    async def test_memory_leak_detected(self, engine, empty_logs):
         """Memory alert + high usage + warnings → matched."""
         alert = {
             "labels": {"alertname": "MemorySaturation", "severity": "warning"},
@@ -150,7 +157,7 @@ class TestMemoryLeakRule:
             "2024-01-15 10:00:00 ERROR malloc failed: out of memory",
             "2024-01-15 10:05:00 WARN memory exhausted, retrying",
         ]
-        result = engine.analyze(alert, metrics, logs)
+        result = await engine.analyze(alert, metrics, logs)
 
         assert result is not None
         assert result.rule_name == "MEMORY_LEAK"
@@ -159,17 +166,19 @@ class TestMemoryLeakRule:
         assert result.recommended_action == "RESTART"
         assert len(result.evidence) >= 2  # Multiple signals
 
-    def test_memory_leak_insufficient_signals(self, engine, empty_logs):
+    @pytest.mark.asyncio
+    async def test_memory_leak_insufficient_signals(self, engine, empty_logs):
         """Memory alert alone without other signals → no match."""
         alert = {
             "labels": {"alertname": "MemorySaturation", "severity": "warning"},
             "annotations": {},
         }
         metrics = {}  # No metrics data
-        result = engine.analyze(alert, metrics, empty_logs)
+        result = await engine.analyze(alert, metrics, empty_logs)
         assert result is None  # Need at least 2 signals
 
-    def test_memory_leak_not_memory_alert(self, engine, empty_logs):
+    @pytest.mark.asyncio
+    async def test_memory_leak_not_memory_alert(self, engine, empty_logs):
         """High memory usage but wrong alert type → no match."""
         alert = {
             "labels": {"alertname": "LatencyHigh", "severity": "warning"},
@@ -179,7 +188,7 @@ class TestMemoryLeakRule:
             "memleak_bytes_allocated": 1_200_000_000,
         }
         logs = ["ERROR malloc failed"]
-        result = engine.analyze(alert, metrics, logs)
+        result = await engine.analyze(alert, metrics, logs)
         assert result is None  # Not a memory alert
 
 
@@ -188,7 +197,8 @@ class TestMemoryLeakRule:
 class TestCPUSaturationRule:
     """Test CPU saturation detection (confidence 0.82-0.85)."""
 
-    def test_cpu_saturation_with_traffic_spike(self, engine, empty_logs):
+    @pytest.mark.asyncio
+    async def test_cpu_saturation_with_traffic_spike(self, engine, empty_logs):
         """High CPU + high traffic → SCALE action."""
         alert = {
             "labels": {"alertname": "CPUSaturation", "severity": "warning"},
@@ -198,7 +208,7 @@ class TestCPUSaturationRule:
             "cpu_usage_percent": 85.0,  # High CPU
             "request_rate_5m": 1500.0,  # High traffic
         }
-        result = engine.analyze(alert, metrics, empty_logs)
+        result = await engine.analyze(alert, metrics, empty_logs)
 
         assert result is not None
         assert result.rule_name == "CPU_SATURATION_TRAFFIC"
@@ -206,7 +216,8 @@ class TestCPUSaturationRule:
         assert result.root_cause == RootCauseCategory.TRAFFIC_SPIKE
         assert result.recommended_action == "SCALE"
 
-    def test_cpu_saturation_efficiency_problem(self, engine, empty_logs):
+    @pytest.mark.asyncio
+    async def test_cpu_saturation_efficiency_problem(self, engine, empty_logs):
         """High CPU + normal traffic → RESTART action."""
         alert = {
             "labels": {"alertname": "CPUSaturation", "severity": "warning"},
@@ -216,7 +227,7 @@ class TestCPUSaturationRule:
             "cpu_usage_percent": 85.0,  # High CPU
             "request_rate_5m": 100.0,   # Normal traffic
         }
-        result = engine.analyze(alert, metrics, empty_logs)
+        result = await engine.analyze(alert, metrics, empty_logs)
 
         assert result is not None
         assert result.rule_name == "CPU_SATURATION_EFFICIENCY"
@@ -224,17 +235,19 @@ class TestCPUSaturationRule:
         assert result.root_cause == RootCauseCategory.CPU_SATURATION
         assert result.recommended_action == "RESTART"
 
-    def test_cpu_saturation_missing_cpu_data(self, engine, empty_logs):
+    @pytest.mark.asyncio
+    async def test_cpu_saturation_missing_cpu_data(self, engine, empty_logs):
         """CPU alert but no CPU metric → no match."""
         alert = {
             "labels": {"alertname": "CPUSaturation", "severity": "warning"},
             "annotations": {},
         }
         metrics = {}  # No CPU data
-        result = engine.analyze(alert, metrics, empty_logs)
+        result = await engine.analyze(alert, metrics, empty_logs)
         assert result is None
 
-    def test_cpu_saturation_below_threshold(self, engine, empty_logs):
+    @pytest.mark.asyncio
+    async def test_cpu_saturation_below_threshold(self, engine, empty_logs):
         """CPU usage below 80% → no match."""
         alert = {
             "labels": {"alertname": "CPUSaturation", "severity": "warning"},
@@ -243,7 +256,7 @@ class TestCPUSaturationRule:
         metrics = {
             "cpu_usage_percent": 70.0,  # Below 80% threshold
         }
-        result = engine.analyze(alert, metrics, empty_logs)
+        result = await engine.analyze(alert, metrics, empty_logs)
         assert result is None
 
 
@@ -252,14 +265,15 @@ class TestCPUSaturationRule:
 class TestTrafficSpikeRule:
     """Test traffic spike detection (confidence 0.87)."""
 
-    def test_traffic_spike_with_errors(self, engine, empty_alert, empty_logs):
+    @pytest.mark.asyncio
+    async def test_traffic_spike_with_errors(self, engine, empty_alert, empty_logs):
         """Traffic spike + high errors → matched."""
         metrics = {
             "request_rate_5m": 1500.0,  # Traffic spike
             "error_rate_5m": 0.05,      # 5% errors
             "latency_p99_5m": 0.5,
         }
-        result = engine.analyze(empty_alert, metrics, empty_logs)
+        result = await engine.analyze(empty_alert, metrics, empty_logs)
 
         assert result is not None
         assert result.rule_name == "TRAFFIC_SPIKE"
@@ -267,26 +281,28 @@ class TestTrafficSpikeRule:
         assert result.root_cause == RootCauseCategory.TRAFFIC_SPIKE
         assert result.recommended_action == "SCALE"
 
-    def test_traffic_spike_with_latency(self, engine, empty_alert, empty_logs):
+    @pytest.mark.asyncio
+    async def test_traffic_spike_with_latency(self, engine, empty_alert, empty_logs):
         """Traffic spike + high latency → matched."""
         metrics = {
             "request_rate_5m": 1500.0,  # Traffic spike
             "error_rate_5m": 0.001,
             "latency_p99_5m": 2.0,      # 2s P99 (high)
         }
-        result = engine.analyze(empty_alert, metrics, empty_logs)
+        result = await engine.analyze(empty_alert, metrics, empty_logs)
 
         assert result is not None
         assert result.rule_name == "TRAFFIC_SPIKE"
 
-    def test_traffic_spike_no_symptoms(self, engine, empty_alert, empty_logs):
+    @pytest.mark.asyncio
+    async def test_traffic_spike_no_symptoms(self, engine, empty_alert, empty_logs):
         """Traffic spike without errors/latency → no match."""
         metrics = {
             "request_rate_5m": 1500.0,  # Traffic spike
             "error_rate_5m": 0.001,     # Low errors
             "latency_p99_5m": 0.2,      # Good latency
         }
-        result = engine.analyze(empty_alert, metrics, empty_logs)
+        result = await engine.analyze(empty_alert, metrics, empty_logs)
         assert result is None  # Need traffic + symptoms
 
 
@@ -295,13 +311,14 @@ class TestTrafficSpikeRule:
 class TestDependencyFailureRule:
     """Test dependency failure detection (confidence 0.75)."""
 
-    def test_dependency_failure_connection_refused(self, engine, empty_alert, empty_metrics):
+    @pytest.mark.asyncio
+    async def test_dependency_failure_connection_refused(self, engine, empty_alert, empty_metrics):
         """Connection refused errors in logs → matched."""
         logs = [
             "2024-01-15 10:00:00 ERROR connection refused to database:5432",
             "2024-01-15 10:00:01 WARN retrying connection...",
         ]
-        result = engine.analyze(empty_alert, empty_metrics, logs)
+        result = await engine.analyze(empty_alert, empty_metrics, logs)
 
         assert result is not None
         assert result.rule_name == "DEPENDENCY_FAILURE"
@@ -309,40 +326,44 @@ class TestDependencyFailureRule:
         assert result.root_cause == RootCauseCategory.DEPENDENCY_FAILURE
         assert result.recommended_action == "RESTART"
 
-    def test_dependency_failure_timeout(self, engine, empty_alert, empty_metrics):
+    @pytest.mark.asyncio
+    async def test_dependency_failure_timeout(self, engine, empty_alert, empty_metrics):
         """Timeout errors → matched."""
         logs = [
             "2024-01-15 10:00:00 ERROR dial tcp 10.0.0.1:5432: timeout",
         ]
-        result = engine.analyze(empty_alert, empty_metrics, logs)
+        result = await engine.analyze(empty_alert, empty_metrics, logs)
         assert result is not None
         assert result.rule_name == "DEPENDENCY_FAILURE"
 
-    def test_dependency_failure_dns(self, engine, empty_alert, empty_metrics):
+    @pytest.mark.asyncio
+    async def test_dependency_failure_dns(self, engine, empty_alert, empty_metrics):
         """DNS resolution failures → matched."""
         logs = [
             "2024-01-15 10:00:00 ERROR no such host: database.internal",
         ]
-        result = engine.analyze(empty_alert, empty_metrics, logs)
+        result = await engine.analyze(empty_alert, empty_metrics, logs)
         assert result is not None
         assert result.rule_name == "DEPENDENCY_FAILURE"
 
-    def test_dependency_failure_redis(self, engine, empty_alert, empty_metrics):
+    @pytest.mark.asyncio
+    async def test_dependency_failure_redis(self, engine, empty_alert, empty_metrics):
         """Redis connection failures → matched."""
         logs = [
             "2024-01-15 10:00:00 ERROR redis connection failed: ECONNREFUSED",
         ]
-        result = engine.analyze(empty_alert, empty_metrics, logs)
+        result = await engine.analyze(empty_alert, empty_metrics, logs)
         assert result is not None
         assert result.rule_name == "DEPENDENCY_FAILURE"
 
-    def test_no_dependency_failure(self, engine, empty_alert, empty_metrics):
+    @pytest.mark.asyncio
+    async def test_no_dependency_failure(self, engine, empty_alert, empty_metrics):
         """Normal logs without connection errors → no match."""
         logs = [
             "2024-01-15 10:00:00 INFO Processing request",
             "2024-01-15 10:00:01 INFO Request completed successfully",
         ]
-        result = engine.analyze(empty_alert, empty_metrics, logs)
+        result = await engine.analyze(empty_alert, empty_metrics, logs)
         assert result is None
 
 
@@ -351,7 +372,8 @@ class TestDependencyFailureRule:
 class TestBadDeploymentRule:
     """Test bad deployment detection (confidence 0.78)."""
 
-    def test_bad_deployment_detected(self, engine):
+    @pytest.mark.asyncio
+    async def test_bad_deployment_detected(self, engine):
         """High errors + startup failures + recent alert → matched."""
         alert = {
             "labels": {"alertname": "ErrorRateHigh", "severity": "critical"},
@@ -364,7 +386,7 @@ class TestBadDeploymentRule:
             "2024-01-15 10:00:00 FATAL panic: runtime error",
             "2024-01-15 10:00:01 ERROR failed to start HTTP server",
         ]
-        result = engine.analyze(alert, metrics, logs)
+        result = await engine.analyze(alert, metrics, logs)
 
         assert result is not None
         assert result.rule_name == "BAD_DEPLOYMENT"
@@ -372,7 +394,8 @@ class TestBadDeploymentRule:
         assert result.root_cause == RootCauseCategory.BAD_DEPLOYMENT
         assert result.recommended_action == "ROLLBACK"
 
-    def test_bad_deployment_insufficient_signals(self, engine, empty_logs):
+    @pytest.mark.asyncio
+    async def test_bad_deployment_insufficient_signals(self, engine, empty_logs):
         """Only high errors, no other signals → no match."""
         alert = {
             "labels": {"alertname": "ErrorRateHigh", "severity": "critical"},
@@ -381,10 +404,11 @@ class TestBadDeploymentRule:
         metrics = {
             "error_rate_5m": 0.10,
         }
-        result = engine.analyze(alert, metrics, empty_logs)
+        result = await engine.analyze(alert, metrics, empty_logs)
         assert result is None  # Need at least 2 signals
 
-    def test_bad_deployment_startup_errors_only(self, engine, empty_alert):
+    @pytest.mark.asyncio
+    async def test_bad_deployment_startup_errors_only(self, engine, empty_alert):
         """Startup errors + recent alert but low errors → matched."""
         alert = {
             "labels": {"alertname": "ContainerRestarting", "severity": "warning"},
@@ -397,7 +421,7 @@ class TestBadDeploymentRule:
             "FATAL initialization failed: config not found",
             "PANIC cannot bind to port 8080",
         ]
-        result = engine.analyze(alert, metrics, logs)
+        result = await engine.analyze(alert, metrics, logs)
         # Should match because we have 2 signals: startup errors + recent alert
         assert result is not None
         assert result.rule_name == "BAD_DEPLOYMENT"
@@ -408,7 +432,8 @@ class TestBadDeploymentRule:
 class TestRulePriorityOrdering:
     """Test that high-confidence rules are evaluated before low-confidence ones."""
 
-    def test_oom_kill_takes_priority(self, engine):
+    @pytest.mark.asyncio
+    async def test_oom_kill_takes_priority(self, engine):
         """OOM kill should match first (highest confidence)."""
         alert = {
             "labels": {"alertname": "MemorySaturation", "severity": "critical"},
@@ -422,13 +447,14 @@ class TestRulePriorityOrdering:
             "Out of memory: Kill process 1234",  # OOM kill (0.95 confidence)
             "panic: runtime error",               # Bad deployment signal
         ]
-        result = engine.analyze(alert, metrics, logs)
+        result = await engine.analyze(alert, metrics, logs)
 
         # Should match OOM_KILL (0.95) not BAD_DEPLOYMENT (0.78)
         assert result.rule_name == "OOM_KILL"
         assert result.confidence == 0.95
 
-    def test_restart_loop_before_bad_deployment(self, engine):
+    @pytest.mark.asyncio
+    async def test_restart_loop_before_bad_deployment(self, engine):
         """Restart loop (0.92) should match before bad deployment (0.78)."""
         alert = {
             "labels": {"alertname": "ContainerRestarting", "severity": "critical"},
@@ -443,7 +469,7 @@ class TestRulePriorityOrdering:
             "Exited with code 1",
             "panic: runtime error",  # Bad deployment signal
         ]
-        result = engine.analyze(alert, metrics, logs)
+        result = await engine.analyze(alert, metrics, logs)
         assert result.rule_name == "RESTART_LOOP"
         assert result.confidence == 0.92
 
@@ -453,15 +479,17 @@ class TestRulePriorityOrdering:
 class TestEdgeCases:
     """Test edge cases and unusual scenarios."""
 
-    def test_empty_inputs(self, engine, empty_alert, empty_metrics, empty_logs):
+    @pytest.mark.asyncio
+    async def test_empty_inputs(self, engine, empty_alert, empty_metrics, empty_logs):
         """Empty alert/metrics/logs → no match."""
-        result = engine.analyze(empty_alert, empty_metrics, empty_logs)
+        result = await engine.analyze(empty_alert, empty_metrics, empty_logs)
         assert result is None  # Escalates to LLM
 
-    def test_rule_match_dataclass_fields(self, engine, empty_alert, empty_metrics):
+    @pytest.mark.asyncio
+    async def test_rule_match_dataclass_fields(self, engine, empty_alert, empty_metrics):
         """RuleMatch should have all required fields."""
         logs = ["Out of memory: Kill process 1234"]
-        result = engine.analyze(empty_alert, empty_metrics, logs)
+        result = await engine.analyze(empty_alert, empty_metrics, logs)
 
         assert result is not None
         assert hasattr(result, "matched")
@@ -476,7 +504,8 @@ class TestEdgeCases:
         assert isinstance(result.evidence, list)
         assert len(result.reasoning) > 0
 
-    def test_multiple_rules_could_match(self, engine):
+    @pytest.mark.asyncio
+    async def test_multiple_rules_could_match(self, engine):
         """When multiple patterns present, highest confidence wins."""
         alert = {
             "labels": {"alertname": "CPUSaturation", "severity": "warning"},
@@ -489,31 +518,33 @@ class TestEdgeCases:
         logs = [
             "connection refused to database:5432",  # Dependency failure (0.75)
         ]
-        result = engine.analyze(alert, metrics, logs)
+        result = await engine.analyze(alert, metrics, logs)
 
         # CPU saturation rule (0.82) should match before dependency failure (0.75)
         # because CPU rules are evaluated first in the priority order
         assert result.rule_name == "CPU_SATURATION_EFFICIENCY"
 
-    def test_case_insensitive_pattern_matching(self, engine, empty_alert, empty_metrics):
+    @pytest.mark.asyncio
+    async def test_case_insensitive_pattern_matching(self, engine, empty_alert, empty_metrics):
         """Pattern matching should be case-insensitive."""
         logs = [
             "OUT OF MEMORY: KILL PROCESS 1234",  # All caps
         ]
-        result = engine.analyze(empty_alert, empty_metrics, logs)
+        result = await engine.analyze(empty_alert, empty_metrics, logs)
         assert result is not None
         assert result.rule_name == "OOM_KILL"
 
-    def test_confidence_ranges(self, engine):
+    @pytest.mark.asyncio
+    async def test_confidence_ranges(self, engine):
         """All rule confidences should be in valid ranges."""
         # High-confidence rules (≥0.90)
         logs_oom = ["Out of memory: Kill process 1234"]
-        result = engine.analyze({}, {}, logs_oom)
+        result = await engine.analyze({}, {}, logs_oom)
         assert result.confidence >= 0.90
 
         # Medium-confidence rules (0.70-0.89)
         logs_dep = ["connection refused to database"]
-        result = engine.analyze({}, {}, logs_dep)
+        result = await engine.analyze({}, {}, logs_dep)
         assert 0.70 <= result.confidence < 0.90
 
 
@@ -527,11 +558,12 @@ class TestEdgeCases:
     ("dial tcp timeout", "DEPENDENCY_FAILURE"),
     ("no such host", "DEPENDENCY_FAILURE"),
 ])
-def test_log_pattern_matching(log_pattern, expected_rule):
+@pytest.mark.asyncio
+async def test_log_pattern_matching(log_pattern, expected_rule):
     """Test various log patterns match correct rules."""
     engine = RuleEngine()
     logs = log_pattern.split("\n")
-    result = engine.analyze({}, {}, logs)
+    result = await engine.analyze({}, {}, logs)
     assert result is not None
     assert result.rule_name == expected_rule
 
@@ -541,12 +573,13 @@ def test_log_pattern_matching(log_pattern, expected_rule):
     (85, 100, "RESTART"),   # High CPU + normal traffic → RESTART
     (70, 1500, None),       # Normal CPU + high traffic → no match
 ])
-def test_cpu_saturation_action_routing(cpu, traffic, expected_action):
+@pytest.mark.asyncio
+async def test_cpu_saturation_action_routing(cpu, traffic, expected_action):
     """Test CPU saturation rule routes to correct action."""
     engine = RuleEngine()
     alert = {"labels": {"alertname": "CPUSaturation"}, "annotations": {}}
     metrics = {"cpu_usage_percent": cpu, "request_rate_5m": traffic}
-    result = engine.analyze(alert, metrics, [])
+    result = await engine.analyze(alert, metrics, [])
 
     if expected_action is None:
         assert result is None

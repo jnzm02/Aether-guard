@@ -33,10 +33,15 @@ import anthropic
 import httpx
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
+from starlette.responses import Response
 
 from prompt import SYSTEM_PROMPT, build_user_prompt
 from postmortem import generate as generate_postmortem, save as save_postmortem
 from remediation import execute_action
+from incident_report import build_report
+from incident_storage import get_storage
+import metrics
+import enrichment
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pydantic response models (used by FastAPI for Swagger schema generation)
@@ -90,6 +95,43 @@ class AckRequest(BaseModel):
     confidence: float = Field(..., ge=0.0, le=1.0, examples=[0.92])
 
 
+class IncidentReportResponse(BaseModel):
+    incident_id: str = Field(..., examples=["abc123def456"])
+    detected_at: str = Field(..., examples=["2026-07-07T10:23:45+00:00"])
+    resolved_at: str = Field(..., examples=["2026-07-07T10:25:18+00:00"])
+    duration_ms: int = Field(..., examples=[93000])
+    trigger: str = Field(..., examples=["SLOErrorBudgetBurnCritical"])
+    matched_pattern: str = Field(..., examples=["rule:oom_kill"])
+    confidence: float = Field(..., examples=[0.95])
+    action_taken: str = Field(..., examples=["RESTART"])
+    outcome: str = Field(..., examples=["auto_resolved"])
+    severity: str = Field(..., examples=["critical"])
+
+
+class IncidentListResponse(BaseModel):
+    incidents: list[IncidentReportResponse]
+    total: int = Field(..., examples=[42])
+
+
+class OverrideRequest(BaseModel):
+    override_status: str = Field(..., examples=["manual_reversal"], description="manual_reversal | manual_escalation")
+    override_reason: str = Field(..., examples=["Agent restarted the wrong pod, manually rolled back"], description="Human explanation for the override")
+    override_by: str = Field(default="api:unknown", examples=["api:sre_username", "slack:U12345"], description="Source:identifier tracking who triggered the override")
+
+
+class AlertmanagerWebhookPayload(BaseModel):
+    """Alertmanager webhook payload schema (Priority 3 — direct webhook integration)"""
+    receiver: str = Field(default="", examples=["aether-guard"])
+    status: str = Field(..., examples=["firing", "resolved"])
+    alerts: list[dict[str, Any]] = Field(..., description="Array of alerts from Alertmanager")
+    groupLabels: dict[str, str] = Field(default_factory=dict)
+    commonLabels: dict[str, str] = Field(default_factory=dict)
+    commonAnnotations: dict[str, str] = Field(default_factory=dict)
+    externalURL: str = Field(default="", examples=["http://alertmanager:9093"])
+    version: str = Field(default="4")
+    groupKey: str = Field(default="")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Logging (must be before V2 imports)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -134,6 +176,19 @@ VALID_ACTIONS = {"RESTART", "SCALE", "ROLLBACK", "IGNORE"}
 # State
 # ─────────────────────────────────────────────────────────────────────────────
 analyses: list[dict[str, Any]] = []   # in-memory history (Phase 4 reads this)
+
+# Priority 3: Webhook deduplication cache
+# Maps fingerprint -> timestamp of last processing (for 5min dedup window)
+# LIMITATION: In-memory cache resets on agent restart. This is acceptable for single-instance
+# deployments. For multi-instance setups, consider migrating to Redis with TTL or using
+# Postgres incident_id lookup with DISTINCT ON fingerprint + recent timestamp filter.
+_webhook_dedup_cache: dict[str, datetime] = {}
+_webhook_stats = {
+    "webhooks_received": 0,
+    "alerts_from_webhook": 0,
+    "alerts_deduplicated": 0,
+    "resolved_alerts_received": 0,
+}
 
 _stats = {
     "polls":           0,
@@ -282,7 +337,7 @@ async def analyze_alert(alert: dict) -> dict[str, Any]:
             metrics = alert.get("prometheus_snapshot", {})
             logs = alert.get("logs", [])
 
-            rule_match = _rule_engine.analyze(alert, metrics, logs)
+            rule_match = await _rule_engine.analyze(alert, metrics, logs)
 
             if rule_match and rule_match.confidence >= 0.85:
                 log.info(
@@ -409,7 +464,12 @@ async def ack_alert(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def persist_analysis(analysis: dict) -> None:
-    """Append analysis to JSONL file for Phase 4 post-mortem generation."""
+    """
+    [DEPRECATED] Append analysis to JSONL file for Phase 4 post-mortem generation.
+
+    This is kept as a belt-and-suspenders fallback in case Postgres write path fails.
+    Will be removed once Postgres storage proves stable (Priority 1 implementation).
+    """
     if DRY_RUN:
         return
     try:
@@ -438,6 +498,179 @@ def load_analyses_from_disk() -> list[dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Alert processing pipeline (shared by polling and webhook)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _process_single_alert(alert: dict[str, Any], source: str = "poll") -> None:
+    """
+    Process a single alert through the full RCA → safety pipeline → incident report flow.
+
+    This function is used by both:
+      - Polling loop (source="poll")
+      - Webhook handler (source="webhook")
+
+    Args:
+        alert: Enriched alert dict with metrics_snapshot, log_tail, etc.
+        source: "poll" or "webhook" (for logging purposes)
+    """
+    try:
+        analysis = await analyze_alert(alert)
+
+        # ────────────────────────────────────────────────────────────
+        # V2: Policy Gate - Check if action is allowed
+        # ────────────────────────────────────────────────────────────
+        if V2_ENABLED and analysis["action"] != "IGNORE":
+            try:
+                severity = alert.get("labels", {}).get("severity", "warning")
+                root_cause = analysis.get("root_cause", "unknown")
+
+                policy_decision = check_policy(
+                    action=analysis["action"],
+                    alert_severity=severity,
+                    root_cause=root_cause,
+                )
+
+                if not policy_decision.allowed:
+                    log.warning(
+                        "❌ Policy violation: %s — overriding %s → IGNORE",
+                        policy_decision.reason,
+                        analysis["action"],
+                    )
+                    analysis["action"] = "IGNORE"
+                    analysis["reasoning"] += f"\n[Policy blocked: {policy_decision.reason}]"
+                    analysis["policy_blocked"] = True
+
+                elif policy_decision.requires_approval:
+                    log.warning(
+                        "⏸️  High-risk action %s requires approval (%s) — proceeding in 5s for demo",
+                        analysis["action"],
+                        policy_decision.risk_level.name,
+                    )
+                    await asyncio.sleep(5)
+                    analysis["approval_required"] = True
+                    analysis["approval_status"] = "auto-approved-demo"
+
+                analysis["policy_decision"] = {
+                    "allowed": policy_decision.allowed,
+                    "risk_level": policy_decision.risk_level.name,
+                    "requires_approval": policy_decision.requires_approval,
+                    "reason": policy_decision.reason,
+                }
+
+            except Exception as policy_exc:
+                log.warning("Policy engine failed: %s — allowing action", policy_exc)
+
+        # ────────────────────────────────────────────────────────────
+        # V2: Capture metrics BEFORE remediation (for verification)
+        # ────────────────────────────────────────────────────────────
+        metrics_before = None
+        if V2_ENABLED and analysis["action"] != "IGNORE":
+            try:
+                async with VerificationEngine() as verifier:
+                    metrics_before = await verifier.capture_snapshot()
+                    log.info("📊 Captured metrics snapshot before remediation")
+            except Exception as verify_exc:
+                log.warning("Metric capture failed: %s — proceeding without verification", verify_exc)
+
+        # ────────────────────────────────────────────────────────────
+        # Execute remediation action
+        # ────────────────────────────────────────────────────────────
+        remediation = execute_action(analysis["action"], analysis)
+        analysis["remediation"] = remediation.as_dict()
+        log.info(
+            "Remediation  action=%s  outcome=%s  container=%s",
+            remediation.action, remediation.outcome, remediation.container,
+        )
+
+        # ────────────────────────────────────────────────────────────
+        # V2: Verify remediation outcome (did metrics improve?)
+        # ────────────────────────────────────────────────────────────
+        if V2_ENABLED and metrics_before and remediation.executed:
+            try:
+                async with VerificationEngine() as verifier:
+                    alert_type = alert.get("labels", {}).get("alertname", "")
+                    verification = await verifier.verify(
+                        metrics_before=metrics_before,
+                        alert_type=alert_type,
+                        wait_seconds=120,
+                    )
+
+                    analysis["verification"] = {
+                        "success": verification.success,
+                        "improved": verification.improved,
+                        "reason": verification.reason,
+                        "should_rollback": verification.should_rollback,
+                        "metrics_before": {
+                            "error_rate": metrics_before.error_rate_5m,
+                            "p99_latency": metrics_before.latency_p99_5m,
+                        },
+                        "metrics_after": {
+                            "error_rate": verification.metrics_after.error_rate_5m,
+                            "p99_latency": verification.metrics_after.latency_p99_5m,
+                        },
+                    }
+
+                    if verification.should_rollback:
+                        log.error(
+                            "❌ Verification failed: %s — executing auto-rollback",
+                            verification.reason,
+                        )
+                        rollback_result = execute_action("ROLLBACK", analysis)
+                        analysis["auto_rollback"] = rollback_result.as_dict()
+                        log.info("🔄 Auto-rollback executed: %s", rollback_result.outcome)
+                    else:
+                        log.info("✅ Verification successful: %s", verification.reason)
+
+            except Exception as verify_exc:
+                log.error("Verification failed: %s", verify_exc)
+                analysis["verification_error"] = str(verify_exc)
+
+        analyses.append(analysis)
+        persist_analysis(analysis)
+
+        # ────────────────────────────────────────────────────────────
+        # Priority 1: Store structured incident report
+        # ────────────────────────────────────────────────────────────
+        if not DRY_RUN:
+            try:
+                incident_report = build_report(analysis)
+                async with get_storage() as storage:
+                    await storage.save(incident_report)
+                log.info("📊 Incident report stored: %s → %s",
+                        incident_report.incident_id[:12],
+                        incident_report.outcome)
+            except Exception as storage_exc:
+                log.warning("Incident report storage failed: %s", storage_exc)
+
+        # ────────────────────────────────────────────────────────────
+        # Auto-generate blameless post-mortem
+        # ────────────────────────────────────────────────────────────
+        try:
+            pm_text = generate_postmortem(analysis)
+            pm_path = save_postmortem(pm_text, analysis, POSTMORTEM_DIR)
+            if pm_path:
+                log.info("📄 Post-mortem written: %s", pm_path)
+                analysis["postmortem_path"] = str(pm_path)
+        except Exception as pm_exc:
+            log.warning("Post-mortem generation failed: %s", pm_exc)
+
+        _stats["alerts_processed"] += 1
+
+        log.info(
+            "✅ Analysis complete  source=%s  alertname=%s  action=%s  confidence=%.2f  rca_method=%s",
+            source,
+            analysis["alertname"],
+            analysis["action"],
+            analysis["confidence"],
+            analysis.get("rca_method", "unknown"),
+        )
+
+    except Exception as exc:
+        log.error("Failed to process alert %s from %s: %s", alert.get("id"), source, exc)
+        raise
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Polling loop
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -452,145 +685,13 @@ async def _poll_once(client: httpx.AsyncClient) -> int:
 
     for alert in pending:
         try:
-            analysis = await analyze_alert(alert)
-
-            # ────────────────────────────────────────────────────────────
-            # V2: Policy Gate - Check if action is allowed
-            # ────────────────────────────────────────────────────────────
-            if V2_ENABLED and analysis["action"] != "IGNORE":
-                try:
-                    severity = alert.get("labels", {}).get("severity", "warning")
-                    root_cause = analysis.get("root_cause", "unknown")
-
-                    policy_decision = check_policy(
-                        action=analysis["action"],
-                        alert_severity=severity,
-                        root_cause=root_cause,
-                    )
-
-                    if not policy_decision.allowed:
-                        log.warning(
-                            "❌ Policy violation: %s — overriding %s → IGNORE",
-                            policy_decision.reason,
-                            analysis["action"],
-                        )
-                        analysis["action"] = "IGNORE"
-                        analysis["reasoning"] += f"\n[Policy blocked: {policy_decision.reason}]"
-                        analysis["policy_blocked"] = True
-
-                    elif policy_decision.requires_approval:
-                        log.warning(
-                            "⏸️  High-risk action %s requires approval (%s) — proceeding in 5s for demo",
-                            analysis["action"],
-                            policy_decision.risk_level.name,
-                        )
-                        await asyncio.sleep(5)
-                        analysis["approval_required"] = True
-                        analysis["approval_status"] = "auto-approved-demo"
-
-                    analysis["policy_decision"] = {
-                        "allowed": policy_decision.allowed,
-                        "risk_level": policy_decision.risk_level.name,
-                        "requires_approval": policy_decision.requires_approval,
-                        "reason": policy_decision.reason,
-                    }
-
-                except Exception as policy_exc:
-                    log.warning("Policy engine failed: %s — allowing action", policy_exc)
-
-            # ────────────────────────────────────────────────────────────
-            # V2: Capture metrics BEFORE remediation (for verification)
-            # ────────────────────────────────────────────────────────────
-            metrics_before = None
-            if V2_ENABLED and analysis["action"] != "IGNORE":
-                try:
-                    async with VerificationEngine() as verifier:
-                        metrics_before = await verifier.capture_snapshot()
-                        log.info("📊 Captured metrics snapshot before remediation")
-                except Exception as verify_exc:
-                    log.warning("Metric capture failed: %s — proceeding without verification", verify_exc)
-
-            # ────────────────────────────────────────────────────────────
-            # Execute remediation action
-            # ────────────────────────────────────────────────────────────
-            remediation = execute_action(analysis["action"], analysis)
-            analysis["remediation"] = remediation.as_dict()
-            log.info(
-                "Remediation  action=%s  outcome=%s  container=%s",
-                remediation.action, remediation.outcome, remediation.container,
-            )
-
-            # ────────────────────────────────────────────────────────────
-            # V2: Verify remediation outcome (did metrics improve?)
-            # ────────────────────────────────────────────────────────────
-            if V2_ENABLED and metrics_before and remediation.executed:
-                try:
-                    async with VerificationEngine() as verifier:
-                        alert_type = alert.get("labels", {}).get("alertname", "")
-                        verification = await verifier.verify(
-                            metrics_before=metrics_before,
-                            alert_type=alert_type,
-                            wait_seconds=120,
-                        )
-
-                        analysis["verification"] = {
-                            "success": verification.success,
-                            "improved": verification.improved,
-                            "reason": verification.reason,
-                            "should_rollback": verification.should_rollback,
-                            "metrics_before": {
-                                "error_rate": metrics_before.error_rate_5m,
-                                "p99_latency": metrics_before.latency_p99_5m,
-                            },
-                            "metrics_after": {
-                                "error_rate": verification.metrics_after.error_rate_5m,
-                                "p99_latency": verification.metrics_after.latency_p99_5m,
-                            },
-                        }
-
-                        if verification.should_rollback:
-                            log.error(
-                                "❌ Verification failed: %s — executing auto-rollback",
-                                verification.reason,
-                            )
-                            rollback_result = execute_action("ROLLBACK", analysis)
-                            analysis["auto_rollback"] = rollback_result.as_dict()
-                            log.info("🔄 Auto-rollback executed: %s", rollback_result.outcome)
-                        else:
-                            log.info("✅ Verification successful: %s", verification.reason)
-
-                except Exception as verify_exc:
-                    log.error("Verification failed: %s", verify_exc)
-                    analysis["verification_error"] = str(verify_exc)
-
-            analyses.append(analysis)
-            persist_analysis(analysis)
-
-            # ────────────────────────────────────────────────────────────
-            # Auto-generate blameless post-mortem
-            # ────────────────────────────────────────────────────────────
-            try:
-                pm_text = generate_postmortem(analysis)
-                pm_path = save_postmortem(pm_text, analysis, POSTMORTEM_DIR)
-                if pm_path:
-                    log.info("📄 Post-mortem written: %s", pm_path)
-                    analysis["postmortem_path"] = str(pm_path)
-            except Exception as pm_exc:
-                log.warning("Post-mortem generation failed: %s", pm_exc)
-
-            _stats["alerts_processed"] += 1
+            # Process alert through the shared pipeline
+            await _process_single_alert(alert, source="poll")
             processed += 1
 
-            log.info(
-                "✅ Analysis complete  alertname=%s  action=%s  confidence=%.2f  rca_method=%s",
-                analysis["alertname"],
-                analysis["action"],
-                analysis["confidence"],
-                analysis.get("rca_method", "unknown"),
-            )
-
+            # ACK the alert back to listener
             if not DRY_RUN:
-                await ack_alert(client, alert["id"], analysis)
+                await ack_alert(client, alert["id"], analyses[-1])
 
             # Brief pause between API calls to be kind to rate limits
             await asyncio.sleep(2)
@@ -645,6 +746,13 @@ async def lifespan(app: FastAPI):
     if DRY_RUN:
         log.info("🧪 DRY_RUN=true — alerts will be analyzed but NOT ACKed or persisted")
 
+    # Priority 2: Populate Prometheus metrics from Postgres on startup
+    try:
+        async with get_storage() as storage:
+            await metrics.populate_metrics_from_storage(storage)
+    except Exception as exc:
+        log.error("Failed to populate Prometheus metrics on startup: %s", exc)
+
     asyncio.create_task(polling_loop())
     yield
 
@@ -683,6 +791,13 @@ _TAGS_METADATA = [
     {
         "name": "analyses",
         "description": "AI Root Cause Analysis records produced by Claude for each alert.",
+    },
+    {
+        "name": "incidents",
+        "description": (
+            "Structured incident reports with queryable outcomes, patterns, and verification results. "
+            "Stored in Postgres for long-term analytics and trust metrics (Priority 1)."
+        ),
     },
     {
         "name": "postmortems",
@@ -818,6 +933,402 @@ async def manually_trigger(alert_id: str, background_tasks: BackgroundTasks):
 
 
 @app.get(
+    "/incidents",
+    tags=["incidents"],
+    summary="List recent incident reports",
+    response_model=IncidentListResponse,
+    responses={
+        200: {
+            "description": "Array of structured incident reports, ordered by detected_at DESC",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "incidents": [
+                            {
+                                "incident_id": "abc123def456",
+                                "detected_at": "2026-07-07T10:23:45+00:00",
+                                "resolved_at": "2026-07-07T10:25:18+00:00",
+                                "duration_ms": 93000,
+                                "trigger": "SLOErrorBudgetBurnCritical",
+                                "matched_pattern": "rule:oom_kill",
+                                "confidence": 0.95,
+                                "action_taken": "RESTART",
+                                "outcome": "auto_resolved",
+                                "severity": "critical",
+                            }
+                        ],
+                        "total": 42,
+                    }
+                }
+            },
+        },
+        503: {"description": "Postgres unavailable — incident storage not accessible"},
+    },
+)
+async def list_incidents(limit: int = 50):
+    """
+    Return the most recent `limit` incident reports from Postgres.
+
+    Incidents are ordered by detected_at descending (most recent first).
+    Each incident includes outcome taxonomy, matched pattern, and verification result.
+    """
+    try:
+        async with get_storage() as storage:
+            reports = await storage.get_recent(limit=limit)
+            return IncidentListResponse(
+                incidents=[
+                    IncidentReportResponse(
+                        incident_id=r.incident_id,
+                        detected_at=r.detected_at,
+                        resolved_at=r.resolved_at,
+                        duration_ms=r.duration_ms,
+                        trigger=r.trigger,
+                        matched_pattern=r.matched_pattern,
+                        confidence=r.confidence,
+                        action_taken=r.action_taken,
+                        outcome=r.outcome,
+                        severity=r.severity,
+                    )
+                    for r in reports
+                ],
+                total=len(reports),
+            )
+    except Exception as exc:
+        log.error("Failed to retrieve incidents from storage: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Incident storage unavailable: {exc}",
+        )
+
+
+@app.get(
+    "/incidents/{incident_id}",
+    tags=["incidents"],
+    summary="Get incident report by ID",
+    responses={
+        200: {"description": "Full incident report with all fields including full_analysis"},
+        404: {"description": "No incident found for this ID"},
+        503: {"description": "Postgres unavailable — incident storage not accessible"},
+    },
+)
+async def get_incident(incident_id: str):
+    """
+    Fetch the full incident report for a specific incident ID.
+
+    Returns the complete IncidentReport including full_analysis dict for deep inspection.
+    """
+    try:
+        async with get_storage() as storage:
+            report = await storage.get_by_id(incident_id)
+            if not report:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No incident found for ID {incident_id!r}",
+                )
+            return report.as_dict()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error("Failed to retrieve incident %s from storage: %s", incident_id, exc)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Incident storage unavailable: {exc}",
+        )
+
+
+@app.post(
+    "/incidents/{incident_id}/override",
+    tags=["incidents"],
+    summary="Record a human override for an incident",
+    responses={
+        200: {"description": "Override recorded successfully"},
+        400: {"description": "Invalid override_status value"},
+        404: {"description": "Incident not found"},
+        409: {"description": "Incident already has an override — cannot overwrite"},
+        503: {"description": "Postgres unavailable — cannot record override"},
+    },
+)
+async def record_override(incident_id: str, request: OverrideRequest):
+    """
+    Record that a human operator overrode or escalated the agent's decision.
+
+    This is used for Priority 2 trust metrics: tracking when humans intervene
+    to reverse the agent's action (manual_reversal) or escalate even after
+    the agent reported success (manual_escalation).
+
+    **override_status values:**
+    - `manual_reversal`: Human reversed the agent's action (e.g., agent restarted pod, human rolled it back)
+    - `manual_escalation`: Human escalated after agent auto-resolved (e.g., agent said "fixed", human disagrees)
+
+    **override_by format:** Unstructured "source:identifier" string (e.g. "slack:U12345", "api:username")
+
+    **Note:** This endpoint rejects duplicate overrides (409 Conflict) to preserve audit trail.
+    Query the incident first if you need to see the existing override.
+
+    # TODO: Add authentication before any public exposure (currently assumes local/trusted access)
+    """
+    # Validate override_status
+    valid_statuses = {"manual_reversal", "manual_escalation"}
+    if request.override_status not in valid_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid override_status {request.override_status!r}. Must be one of: {valid_statuses}",
+        )
+
+    try:
+        async with get_storage() as storage:
+            # Check if incident exists
+            report = await storage.get_by_id(incident_id)
+            if not report:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Incident {incident_id!r} not found — cannot record override",
+                )
+
+            # Prevent overwriting existing overrides (preserves audit trail)
+            if report.override_status != "none":
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Incident {incident_id!r} already has override_status={report.override_status!r} "
+                        f"by {report.override_by!r}. Cannot overwrite existing override. "
+                        f"Query GET /incidents/{incident_id} to see current override."
+                    ),
+                )
+
+            # Update override fields
+            success = await storage.update_override(
+                incident_id=incident_id,
+                override_status=request.override_status,
+                override_reason=request.override_reason,
+                override_by=request.override_by,
+                matched_pattern=report.matched_pattern,  # For Prometheus metrics
+            )
+
+            if not success:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Failed to record override for incident {incident_id!r}",
+                )
+
+            return {
+                "incident_id": incident_id,
+                "override_status": request.override_status,
+                "override_by": request.override_by,
+                "message": "Override recorded successfully",
+            }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.error("Failed to record override for %s: %s", incident_id, exc)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Incident storage unavailable: {exc}",
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Priority 3: Alertmanager Webhook Integration
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _should_deduplicate(fingerprint: str) -> bool:
+    """
+    Check if an alert should be deduplicated based on fingerprint.
+
+    Returns True if the alert was processed within the last 5 minutes.
+    """
+    if not fingerprint:
+        return False
+
+    now = datetime.now(timezone.utc)
+    last_processed = _webhook_dedup_cache.get(fingerprint)
+
+    if last_processed:
+        elapsed = (now - last_processed).total_seconds()
+        if elapsed < 300:  # 5 minutes
+            return True
+
+    # Update cache with current timestamp
+    _webhook_dedup_cache[fingerprint] = now
+    return False
+
+
+async def _handle_resolved_alert(alert: dict[str, Any]) -> None:
+    """
+    Handle a resolved alert (Priority 3 design: three scenarios).
+
+    Scenarios:
+      1. Alert resolves BEFORE remediation executes: Mark incident as ignored with remediation_outcome="alert_auto_resolved"
+      2. Alert resolves AFTER remediation started but BEFORE verification completes: Let verification continue
+         (we still need to know if our action helped/hurt, independent of the alert resolving)
+      3. Alert resolves AFTER full pipeline completes: Treat as confirmation, no action needed
+         (incident already has final outcome)
+
+    Implementation:
+      - Lookup incident by fingerprint
+      - If incident found and outcome not yet final (not auto_resolved/rolled_back), mark as alert_auto_resolved
+      - If incident already completed, log as confirmation but don't modify
+      - If incident not found, log and continue (alert may have been deduplicated)
+    """
+    fingerprint = alert.get("fingerprint")
+    if not fingerprint:
+        log.warning("Resolved alert missing fingerprint — cannot match to incident")
+        return
+
+    alertname = alert.get("labels", {}).get("alertname", "unknown")
+    resolved_at = alert.get("endsAt", datetime.now(timezone.utc).isoformat())
+
+    try:
+        async with get_storage() as storage:
+            # Lookup incident by fingerprint
+            incident = await storage.get_by_fingerprint(fingerprint)
+
+            if not incident:
+                log.info(
+                    "Resolved alert received but no matching incident found  fingerprint=%s  alertname=%s "
+                    "(may have been deduplicated or not yet created)",
+                    fingerprint[:12],
+                    alertname,
+                )
+                return
+
+            # Scenario 3: Incident already completed (auto_resolved or rolled_back)
+            if incident.outcome in ("auto_resolved", "rolled_back"):
+                log.info(
+                    "✅ Resolved alert confirms completed incident  incident=%s  outcome=%s  alertname=%s",
+                    incident.incident_id[:12],
+                    incident.outcome,
+                    alertname,
+                )
+                return
+
+            # Scenario 1: Alert resolved before remediation completed
+            # Mark incident as alert_auto_resolved (don't execute unnecessary remediation)
+            success = await storage.mark_alert_resolved(
+                incident_id=incident.incident_id,
+                resolved_at=resolved_at,
+            )
+
+            if success:
+                log.info(
+                    "⏭️  Alert auto-resolved before remediation completed  incident=%s  alertname=%s "
+                    "→ outcome=ignored, remediation_outcome=alert_auto_resolved",
+                    incident.incident_id[:12],
+                    alertname,
+                )
+            else:
+                # Scenario 2: Update failed because incident already completed during this function call
+                # (race condition: verification finished between get_by_fingerprint and mark_alert_resolved)
+                log.debug(
+                    "Alert resolved update skipped for %s (incident completed concurrently)",
+                    incident.incident_id[:12],
+                )
+
+    except Exception as exc:
+        log.error("Failed to handle resolved alert %s: %s", fingerprint, exc)
+
+
+@app.post(
+    "/webhook/alertmanager",
+    status_code=202,
+    tags=["alertmanager"],
+    summary="Receive Alertmanager webhook payload",
+    responses={
+        202: {"description": "Alerts received and processing started"},
+        422: {"description": "Invalid payload structure"},
+    },
+)
+async def receive_alertmanager_webhook(
+    payload: AlertmanagerWebhookPayload,
+    background_tasks: BackgroundTasks,
+):
+    """
+    Alertmanager direct webhook endpoint (Priority 3).
+
+    Receives Alertmanager webhook payloads and processes alerts through the full
+    RCA → safety pipeline → incident report flow, bypassing the polling loop.
+
+    **Benefits over polling:**
+    - Zero latency (instant response to alert fires)
+    - No 0-10s polling delay
+    - Webhook path and polling path coexist (both funnel into same pipeline)
+
+    **Deduplication:** 5-minute fingerprint-based cache prevents duplicate processing
+    if the same alert arrives via both webhook and polling.
+
+    **Resolved alerts:** Alerts with status="resolved" are handled per Priority 3 design:
+    - If incident in-flight: mark as resolved, don't execute remediation
+    - If incident complete: log and ignore
+
+    **Payload schema:** https://prometheus.io/docs/alerting/latest/configuration/#webhook_config
+    """
+    _webhook_stats["webhooks_received"] += 1
+
+    raw_alerts = payload.alerts
+    if not raw_alerts:
+        log.info("Webhook received with no alerts — returning 202")
+        return {"status": "accepted", "enqueued": 0, "deduplicated": 0}
+
+    log.info(
+        "Webhook received  receiver=%s  status=%s  alerts=%d",
+        payload.receiver,
+        payload.status,
+        len(raw_alerts),
+    )
+
+    enqueued = 0
+    deduplicated = 0
+
+    for raw_alert in raw_alerts:
+        fingerprint = raw_alert.get("fingerprint", "")
+        alert_status = raw_alert.get("status", "unknown")
+        alertname = raw_alert.get("labels", {}).get("alertname", "unknown")
+
+        # Handle resolved alerts
+        if alert_status == "resolved":
+            _webhook_stats["resolved_alerts_received"] += 1
+            await _handle_resolved_alert(raw_alert)
+            continue
+
+        # Check for duplicates (5min window)
+        if _should_deduplicate(fingerprint):
+            log.info(
+                "  ↳ deduplicated  alertname=%s  fingerprint=%s (processed within last 5min)",
+                alertname,
+                fingerprint[:12],
+            )
+            _webhook_stats["alerts_deduplicated"] += 1
+            deduplicated += 1
+            continue
+
+        # Enrich alert and process in background
+        async def process_webhook_alert(alert: dict[str, Any]):
+            try:
+                enriched = await enrichment.enrich_alert(alert, generate_id=True)
+                await _process_single_alert(enriched, source="webhook")
+            except Exception as exc:
+                log.error("Failed to process webhook alert %s: %s", alertname, exc)
+
+        background_tasks.add_task(process_webhook_alert, raw_alert)
+        enqueued += 1
+        _webhook_stats["alerts_from_webhook"] += 1
+
+        log.info(
+            "  ↳ enqueued  alertname=%s  fingerprint=%s  status=%s",
+            alertname,
+            fingerprint[:12] if fingerprint else "none",
+            alert_status,
+        )
+
+    return {
+        "status": "accepted",
+        "enqueued": enqueued,
+        "deduplicated": deduplicated,
+        "resolved": _webhook_stats["resolved_alerts_received"],
+    }
+
+
+@app.get(
     "/stats",
     tags=["observability"],
     summary="Agent runtime statistics",
@@ -923,3 +1434,31 @@ async def latest_postmortem_raw():
     analysis = analyses[-1]
     pm_text  = generate_postmortem(analysis)
     return {"content": pm_text, "alert_id": analysis.get("alert_id")}
+
+
+@app.get(
+    "/metrics",
+    tags=["observability"],
+    summary="Prometheus metrics endpoint",
+    responses={
+        200: {
+            "description": "Prometheus metrics in text exposition format",
+            "content": {"text/plain; version=0.0.4": {}},
+        }
+    },
+)
+async def prometheus_metrics():
+    """
+    Expose Prometheus metrics for scraping by Prometheus server.
+
+    Provides trust metrics for agent reliability:
+      - aether_guard_incidents_total{matched_pattern, outcome}
+      - aether_guard_overrides_total{matched_pattern, override_status}
+
+    These metrics are used to compute override rates and identify which RCA
+    patterns need improvement (Priority 2 trust metrics).
+    """
+    return Response(
+        content=metrics.get_metrics_text(),
+        media_type=metrics.get_metrics_content_type(),
+    )

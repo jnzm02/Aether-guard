@@ -14,9 +14,28 @@ Rule confidence is based on:
 - How specific the pattern match is (exact vs heuristic)
 - How many signals confirm the hypothesis (metrics + logs + alert type)
 - Historical success rate of this rule's recommendations
+
+# ── Backlog: Deferred Patterns (Missing Metrics) ──────────────────────────────
+# TODO: Kafka Connection Leak Pattern
+#   Requires metrics instrumentation PR first:
+#   - kafka_consumer_connections_active (gauge)
+#   - kafka_consumer_lag (gauge by partition)
+#   Trigger: Rising connection count + growing lag over 10min window
+#   Confidence: 0.85 + boosters (log errors, no traffic spike)
+#   Action: RESTART (clears connection pool)
+#
+# TODO: DB Pool Exhaustion Pattern
+#   Requires metrics instrumentation PR first:
+#   - db_pool_connections_active (gauge)
+#   - db_pool_connections_max (gauge)
+#   - db_pool_checkout_duration_seconds (histogram)
+#   Trigger: Pool utilization >85% AND rising/elevated checkout duration
+#   Confidence: 0.70 + boosters (slow queries, connection timeouts in logs)
+#   Action: RESTART (clears stale connections) or SCALE (if load-driven)
 """
 
 import logging
+import os
 import re
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -24,6 +43,21 @@ from typing import Any, Optional
 from policy import RootCauseCategory
 
 log = logging.getLogger(__name__)
+
+# ── Configuration (Goroutine Leak Pattern) ────────────────────────────────────
+# These thresholds are tunable via environment variables for production tuning
+# based on Priority 2 trust metrics (override rates).
+
+GOROUTINE_LEAK_SLOPE_THRESHOLD = float(
+    os.getenv("GOROUTINE_LEAK_SLOPE_THRESHOLD", "0.0833")  # 5 goroutines/min = 0.0833/sec
+)
+GOROUTINE_LEAK_BASELINE = int(os.getenv("GOROUTINE_LEAK_BASELINE", "50"))
+GOROUTINE_LEAK_BASELINE_MULTIPLIER = float(
+    os.getenv("GOROUTINE_LEAK_BASELINE_MULTIPLIER", "3.0")
+)
+HEAP_LEAK_SLOPE_THRESHOLD = float(
+    os.getenv("HEAP_LEAK_SLOPE_THRESHOLD", "166666.67")  # 10 MB/min = 166666.67 bytes/sec
+)
 
 
 @dataclass
@@ -49,7 +83,7 @@ class RuleEngine:
     Remaining 40% are ambiguous and require LLM analysis.
     """
 
-    def analyze(
+    async def analyze(
         self,
         alert: dict[str, Any],
         metrics: dict[str, Optional[float]],
@@ -73,7 +107,7 @@ class RuleEngine:
         """
         alert_name = alert.get("labels", {}).get("alertname", "")
 
-        # High-confidence rules (exact patterns)
+        # ── High-confidence rules (exact patterns, all synchronous) ──────────────
         rule = self._check_oom_kill(alert, logs)
         if rule:
             return rule
@@ -94,12 +128,19 @@ class RuleEngine:
         if rule:
             return rule
 
-        # Medium-confidence rules (heuristics)
+        # ── Medium-confidence rules (heuristics, synchronous) ─────────────────────
         rule = self._check_dependency_failure(logs)
         if rule:
             return rule
 
         rule = self._check_bad_deployment(alert, metrics, logs)
+        if rule:
+            return rule
+
+        # ── Async patterns (require Prometheus query_range API) ──────────────────
+        # These run LAST to preserve <50ms latency for the common fast patterns above.
+        # Only reached if none of the 7 synchronous patterns matched (~40% of cases).
+        rule = await self._check_goroutine_leak(alert_name, metrics, logs)
         if rule:
             return rule
 
@@ -468,3 +509,135 @@ class RuleEngine:
                 ),
             )
         return None
+
+    async def _check_goroutine_leak(
+        self,
+        alert_name: str,
+        metrics: dict[str, Optional[float]],
+        logs: list[str],
+    ) -> Optional[RuleMatch]:
+        """
+        Detect goroutine leaks using trend analysis.
+
+        Pattern: Rising goroutine count over time + elevated absolute count
+        Confidence: 0.85 (base) + boosters
+        Action: RESTART (terminates leaked goroutines)
+
+        This uses the new trend-detection utility to distinguish real leaks
+        (continuous growth) from load-driven increases (rise then stabilize).
+
+        Configuration (tunable via env vars):
+        - GOROUTINE_LEAK_SLOPE_THRESHOLD: Min growth rate to classify as leak
+        - GOROUTINE_LEAK_BASELINE: Expected normal goroutine count
+        - GOROUTINE_LEAK_BASELINE_MULTIPLIER: Absolute threshold = baseline * multiplier
+        - HEAP_LEAK_SLOPE_THRESHOLD: Heap growth rate for confidence booster
+
+        See Grafana dashboard for current baseline:
+        http://localhost:3000/d/target-service/runtime-metrics
+        """
+        from trend_analysis import TrendClassifier
+
+        # Check current goroutine count
+        current_goroutines = metrics.get("runtime_goroutines")
+        if current_goroutines is None:
+            return None
+
+        # Gate 1: Absolute threshold (prevents false positive on normal startup ramp)
+        absolute_threshold = GOROUTINE_LEAK_BASELINE * GOROUTINE_LEAK_BASELINE_MULTIPLIER
+        if current_goroutines < absolute_threshold:
+            return None  # Count is elevated but not extreme
+
+        # Gate 2: Trend analysis (REQUIRED - distinguishes leak from stable high load)
+        classifier = TrendClassifier()
+        try:
+            trend = await classifier.analyze_metric(
+                metric_expr='go_goroutines{job="target-service"}',
+                slope_threshold=GOROUTINE_LEAK_SLOPE_THRESHOLD,
+                window_minutes=10,
+                step_seconds=30,
+            )
+
+            if not trend.is_rising:
+                # Goroutine count is high but stable → legitimate load, not a leak
+                log.debug(
+                    "Goroutine count is elevated (%d) but stable (slope=%.4f) — not a leak",
+                    current_goroutines,
+                    trend.slope,
+                )
+                return None
+
+        except Exception as exc:
+            log.warning("Trend analysis failed for goroutine leak detection: %s", exc)
+            return None  # Can't detect leak without trend data
+
+        # Base confidence: trend + absolute threshold matched
+        confidence = 0.85
+        signals = [
+            f"Goroutine count rising from {trend.start_value:.0f} → {trend.end_value:.0f} "
+            f"over {trend.window_duration_sec / 60:.0f}min (slope: {trend.slope * 60:.1f}/min)",
+            f"Current goroutine count: {current_goroutines:.0f} "
+            f"(baseline: {GOROUTINE_LEAK_BASELINE}, threshold: {absolute_threshold:.0f})",
+            f"Trend confidence: {trend.confidence:.2f} (R² fit)",
+        ]
+
+        # Confidence booster 1: Heap memory also rising (goroutine leak often causes memory leak)
+        try:
+            heap_trend = await classifier.analyze_metric(
+                metric_expr='go_memstats_heap_inuse_bytes{job="target-service"}',
+                slope_threshold=HEAP_LEAK_SLOPE_THRESHOLD,
+                window_minutes=10,
+                step_seconds=30,
+            )
+            if heap_trend.is_rising:
+                confidence += 0.08
+                heap_mb_per_min = (heap_trend.slope * 60) / 1_000_000
+                signals.append(
+                    f"Heap memory also rising: {heap_mb_per_min:.1f} MB/min (confirms leak)"
+                )
+        except Exception as exc:
+            log.debug("Heap trend analysis failed: %s", exc)
+
+        # Confidence booster 2: Log warnings about goroutine/channel issues
+        goroutine_log_patterns = [
+            r"goroutine.*leak",
+            r"deadlock",
+            r"channel.*block",
+            r"context.*cancel",
+            r"too many.*goroutine",
+        ]
+        goroutine_warnings = []
+        for line in logs:
+            for pattern in goroutine_log_patterns:
+                if re.search(pattern, line, re.IGNORECASE):
+                    goroutine_warnings.append(line.strip())
+                    if len(goroutine_warnings) >= 2:
+                        break
+
+        if goroutine_warnings:
+            confidence += 0.05
+            signals.append(f"{len(goroutine_warnings)} goroutine-related warnings in logs")
+
+        # Confidence booster 3: No recent traffic spike (rules out load-driven explanation)
+        request_rate = metrics.get("request_rate_5m_rps", 0.0)
+        is_traffic_spike = request_rate and request_rate > 1000  # Reuse threshold from traffic spike rule
+        if not is_traffic_spike:
+            confidence += 0.05
+            signals.append(
+                f"No traffic spike detected (RPS: {request_rate:.1f}) — rules out load explanation"
+            )
+
+        return RuleMatch(
+            matched=True,
+            rule_name="GOROUTINE_LEAK",
+            root_cause=RootCauseCategory.GOROUTINE_LEAK,
+            confidence=min(1.0, confidence),  # Cap at 1.0
+            evidence=signals + goroutine_warnings[:2],
+            recommended_action="RESTART",
+            reasoning=(
+                f"Detected goroutine leak: goroutine count has grown from {trend.start_value:.0f} to "
+                f"{trend.end_value:.0f} over the past {trend.window_duration_sec / 60:.0f}min with sustained "
+                f"positive slope ({trend.slope * 60:.1f}/min). This indicates goroutines are being spawned "
+                "without cleanup, likely due to channel deadlock, missing context cancellation, or stuck "
+                "background workers. RESTART will terminate leaked goroutines and restore normal operation."
+            ),
+        )
