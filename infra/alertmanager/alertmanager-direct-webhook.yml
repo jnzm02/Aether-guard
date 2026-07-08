@@ -1,0 +1,119 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Alertmanager Configuration — Aether-Guard Priority 3 (Direct Webhook Integration)
+#
+# This configuration routes alerts DIRECTLY to the agent's webhook endpoint,
+# bypassing the listener service and eliminating polling latency.
+#
+# Benefits:
+#   - Zero-latency incident response (no 0-10s polling delay)
+#   - Webhook and polling paths coexist (both use same RCA pipeline)
+#   - Fingerprint-based deduplication prevents double-processing
+#
+# Migration strategy:
+#   - Keep existing listener webhook as backup/fallback
+#   - Add agent webhook as primary receiver
+#   - Both paths funnel into the same incident storage and metrics
+# ─────────────────────────────────────────────────────────────────────────────
+
+global:
+  # After a resolved alert, wait this long before sending a "resolved" notification.
+  resolve_timeout: 5m
+
+# ── Routing Tree ──────────────────────────────────────────────────────────────
+route:
+  # Default receiver: route directly to agent webhook (Priority 3)
+  receiver: "aether-guard-agent"
+  group_by: ["alertname", "instance"]
+  group_wait: 10s        # Wait to batch alerts in the same group
+  group_interval: 30s    # How long to wait before re-sending a group
+  repeat_interval: 5m    # Re-send alerts if still firing after 5 minutes
+
+  routes:
+    # Critical alerts: minimal wait, frequent repeats for page-worthy issues
+    - matchers:
+        - severity="critical"
+      group_wait: 5s
+      repeat_interval: 5m
+      receiver: "aether-guard-agent"
+
+    # Warning alerts: slower cadence to avoid notification spam
+    - matchers:
+        - severity="warning"
+      group_wait: 30s
+      repeat_interval: 15m
+      receiver: "aether-guard-agent"
+
+# ── Receivers ─────────────────────────────────────────────────────────────────
+receivers:
+  # Priority 3: Direct webhook to agent (zero-latency incident response)
+  - name: "aether-guard-agent"
+    webhook_configs:
+      - url: "http://agent:8080/webhook/alertmanager"
+        send_resolved: true  # Critical: send resolved notifications so agent knows when to stop remediation
+        max_alerts: 0        # No limit on alerts per webhook (Alertmanager groups appropriately)
+        http_config:
+          follow_redirects: true
+        # Optional: Add custom headers for auth/tracing if needed
+        # http_config:
+        #   headers:
+        #     Authorization: Bearer <token>
+
+  # Fallback: Keep listener webhook as backup (optional)
+  - name: "aether-guard-listener"
+    webhook_configs:
+      - url: "http://listener:8081/webhook"
+        send_resolved: true
+        max_alerts: 20
+
+# ── Inhibition Rules ──────────────────────────────────────────────────────────
+# Suppress lower-severity alerts when a higher-severity alert is already firing
+# for the same service. Avoids alert storms during full outages.
+inhibit_rules:
+  # If the service is completely down, don't send separate alerts for symptoms
+  # (high error rate, high latency) — those are downstream effects of the same root cause
+  - source_matchers:
+      - alertname="TargetServiceDown"
+    target_matchers:
+      - service="target-service"
+    equal: ["service"]
+
+  # Critical error budget burn inhibits the warning-level slow burn alert
+  - source_matchers:
+      - alertname="SLOErrorBudgetBurnCritical"
+    target_matchers:
+      - alertname="SLOErrorBudgetBurnWarning"
+    equal: ["service", "slo"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Testing the Webhook Endpoint
+# ─────────────────────────────────────────────────────────────────────────────
+# To verify the webhook is working, you can send a test payload:
+#
+# curl -X POST http://agent:8080/webhook/alertmanager \
+#   -H "Content-Type: application/json" \
+#   -d '{
+#     "receiver": "aether-guard-agent",
+#     "status": "firing",
+#     "alerts": [{
+#       "status": "firing",
+#       "labels": {
+#         "alertname": "TestAlert",
+#         "severity": "warning"
+#       },
+#       "annotations": {
+#         "description": "Test alert for webhook validation"
+#       },
+#       "startsAt": "2026-07-08T10:00:00Z",
+#       "endsAt": "0001-01-01T00:00:00Z",
+#       "generatorURL": "http://prometheus:9090/graph",
+#       "fingerprint": "test-fingerprint-123"
+#     }],
+#     "groupLabels": {},
+#     "commonLabels": {},
+#     "commonAnnotations": {},
+#     "externalURL": "http://alertmanager:9093",
+#     "version": "4",
+#     "groupKey": "test-group"
+#   }'
+#
+# Expected response: {"status": "accepted", "enqueued": 1, "deduplicated": 0, "resolved": 0}

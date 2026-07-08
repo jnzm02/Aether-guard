@@ -442,7 +442,7 @@ python3 -m pytest services/agent/tests/ -v
 
 # Python listener — 14 tests (webhook, enrichment, queue)
 python3 -m pytest services/listener/tests/ --import-mode=importlib -v
-```
+``` 
 
 **Test Coverage:**
 - ✅ All 7 rule patterns (OOM kill, restart loop, memory leak, CPU saturation, traffic spike, dependency failure, bad deployment)

@@ -26,6 +26,7 @@ volumes:
   agent_data:
   grafana_data:
   redis_data:
+  postgres_data:
 
 services:
 
@@ -151,6 +152,30 @@ services:
       com.aether-guard.component: "redis"
       com.aether-guard.phase: "3-v2"
 
+  # ── Postgres (Incident Report Store) ──────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=aether_guard
+      - POSTGRES_USER=aether_guard
+      - POSTGRES_PASSWORD=local_dev_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - aether-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aether_guard -d aether_guard"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    labels:
+      com.aether-guard.component: "postgres"
+      com.aether-guard.phase: "3-v2"
+
   # ── AI SRE Agent (Phase 3) ────────────────────────────────────────────────
   agent:
     build:
@@ -166,6 +191,7 @@ services:
       - LISTENER_URL=http://listener:8081
       - ANALYSIS_LOG_PATH=/app/data/analyses.jsonl
       - REDIS_URL=redis://redis:6379/0
+      - POSTGRES_URL=postgresql://aether_guard:local_dev_password@postgres:5432/aether_guard
     volumes:
       - agent_data:/app/data
     restart: unless-stopped
@@ -175,6 +201,8 @@ services:
       listener:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8082/health')\""]
