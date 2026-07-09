@@ -27,16 +27,3 @@ storage:
     pool:
       max_workers: 100
       queue_depth: 10000
-
-# Enable search (allows finding traces by trace ID in Grafana)
-search_enabled: true
-
-# Metrics generator (optional - creates RED metrics from traces)
-metrics_generator:
-  registry:
-    external_labels:
-      source: tempo
-  storage:
-    path: /tmp/tempo/generator/wal
-  traces_storage:
-    path: /tmp/tempo/generator/traces
