@@ -419,6 +419,7 @@ async def test_resolved_alert_updates_incident_report():
     test_fingerprint = "test-resolved-fp-001"
     incident = IncidentReport(
         incident_id="test-incident-resolved-001",
+        trace_id="1234567890abcdef1234567890abcdef",
         detected_at="2026-07-08T10:00:00Z",
         resolved_at="2026-07-08T10:01:00Z",
         duration_ms=60000,

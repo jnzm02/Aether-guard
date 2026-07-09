@@ -370,6 +370,7 @@ def test_incident_report_render_markdown():
     """
     report = IncidentReport(
         incident_id="test-markdown-008-abc123def456",
+        trace_id="abcd1234567890abcdef1234567890ab",
         detected_at="2026-07-07T17:00:00+00:00",
         resolved_at="2026-07-07T17:02:45+00:00",
         duration_ms=165000,  # 2m 45s
