@@ -116,11 +116,11 @@ class RuleEngine:
         if rule:
             return rule
 
-        rule = self._check_memory_leak(alert_name, metrics, logs)
+        rule = await self._check_memory_leak(alert_name, metrics, logs)
         if rule:
             return rule
 
-        rule = self._check_cpu_saturation(alert_name, metrics)
+        rule = await self._check_cpu_saturation(alert_name, metrics)
         if rule:
             return rule
 
@@ -228,19 +228,29 @@ class RuleEngine:
             )
         return None
 
-    def _check_memory_leak(
+    async def _check_memory_leak(
         self,
         alert_name: str,
         metrics: dict[str, Optional[float]],
         logs: list[str],
     ) -> Optional[RuleMatch]:
         """
-        Detect memory leaks from metrics + alert type.
+        Detect memory leaks using trend analysis (Workstream 2).
 
-        Pattern: MemorySaturation alert + high mem usage + malloc warnings
-        Confidence: 0.88
+        Pattern: Rising memory usage over time + elevated absolute usage
+        Confidence: 0.88 (trend-based) or 0.75 (static fallback)
         Action: RESTART (clears leaked memory)
+
+        This now uses TrendClassifier to distinguish real leaks (continuous growth)
+        from load-driven increases (rise then stabilize). Falls back to static
+        threshold if Prometheus is unavailable.
+
+        Configuration:
+        - Static threshold: 1GB (fallback when Prometheus unavailable)
+        - Slope threshold: 10 MB/min (configurable via HEAP_LEAK_SLOPE_THRESHOLD)
         """
+        from trend_analysis import TrendClassifier
+
         is_memory_alert = "Memory" in alert_name or "Saturation" in alert_name
         if not is_memory_alert:
             return None
@@ -249,11 +259,12 @@ class RuleEngine:
         if memory_usage is None:
             return None
 
-        # Check if memory usage is abnormally high (>80% of typical max)
-        # In production, this would compare to historical baseline
-        is_high_memory = memory_usage > 1_000_000_000  # 1GB threshold (example)
+        # Gate 1: Absolute threshold (prevents false positive on normal baseline)
+        STATIC_THRESHOLD = 1_000_000_000  # 1GB
+        if memory_usage < STATIC_THRESHOLD:
+            return None
 
-        # Check logs for memory-related warnings
+        # Collect log evidence (used by both trend and static paths)
         memory_log_patterns = [
             r"malloc.*failed",
             r"out of memory",
@@ -265,44 +276,103 @@ class RuleEngine:
             for pattern in memory_log_patterns:
                 if re.search(pattern, line, re.IGNORECASE):
                     memory_warnings.append(line.strip())
+                    if len(memory_warnings) >= 2:
+                        break
 
-        # Need at least 2 signals to confirm memory leak
-        signals = []
-        if is_memory_alert:
-            signals.append("MemorySaturation alert fired")
-        if is_high_memory:
-            signals.append(f"Memory usage: {memory_usage / 1e9:.2f} GB")
-        if memory_warnings:
-            signals.append(f"{len(memory_warnings)} memory allocation warnings in logs")
+        # Gate 2: Trend analysis (PRIMARY - distinguishes leak from stable high usage)
+        classifier = TrendClassifier()
+        try:
+            trend = await classifier.analyze_metric(
+                metric_expr='go_memstats_heap_alloc_bytes{job="target-service"}',
+                slope_threshold=HEAP_LEAK_SLOPE_THRESHOLD,
+                window_minutes=10,
+                step_seconds=30,
+            )
 
-        if len(signals) >= 2:
+            if not trend.is_rising:
+                # Memory is high but stable → legitimate load, not a leak
+                log.debug(
+                    "Memory usage is elevated (%.2f GB) but stable (slope=%.2f MB/min) — not a leak",
+                    memory_usage / 1e9,
+                    (trend.slope * 60) / 1e6,
+                )
+                return None
+
+            # Trend-based match (high confidence)
+            confidence = 0.88
+            signals = [
+                f"Memory rising from {trend.start_value / 1e9:.2f} GB → {trend.end_value / 1e9:.2f} GB "
+                f"over {trend.window_duration_sec / 60:.0f}min (slope: {(trend.slope * 60) / 1e6:.1f} MB/min)",
+                f"Current memory: {memory_usage / 1e9:.2f} GB (threshold: {STATIC_THRESHOLD / 1e9:.0f} GB)",
+                f"Trend confidence: {trend.confidence:.2f} (R² fit)",
+            ]
+
+            if memory_warnings:
+                confidence += 0.05
+                signals.append(f"{len(memory_warnings)} memory allocation warnings in logs")
+
             return RuleMatch(
                 matched=True,
                 rule_name="MEMORY_LEAK",
                 root_cause=RootCauseCategory.MEMORY_LEAK,
-                confidence=0.88,
+                confidence=min(1.0, confidence),
                 evidence=signals + memory_warnings[:2],
                 recommended_action="RESTART",
                 reasoning=(
-                    "Multiple signals indicate memory leak: "
-                    f"{', '.join(signals)}. "
-                    "RESTART will clear leaked memory and restore normal operation."
+                    f"Detected memory leak: heap allocation has grown from {trend.start_value / 1e9:.2f} GB to "
+                    f"{trend.end_value / 1e9:.2f} GB over the past {trend.window_duration_sec / 60:.0f}min with "
+                    f"sustained positive slope ({(trend.slope * 60) / 1e6:.1f} MB/min). This indicates memory is "
+                    "being allocated without proper cleanup. RESTART will clear leaked memory and restore normal operation."
                 ),
             )
+
+        except Exception as exc:
+            log.warning("Trend analysis failed for memory leak detection, falling back to static threshold: %s", exc)
+
+            # FALLBACK: Static threshold logic (lower confidence)
+            signals = [
+                f"Memory usage: {memory_usage / 1e9:.2f} GB (threshold: {STATIC_THRESHOLD / 1e9:.0f} GB)",
+                "MemorySaturation alert fired",
+            ]
+
+            if memory_warnings:
+                signals.append(f"{len(memory_warnings)} memory allocation warnings in logs")
+
+            # Require at least 2 signals for static match
+            if len(signals) >= 2:
+                return RuleMatch(
+                    matched=True,
+                    rule_name="MEMORY_LEAK",
+                    root_cause=RootCauseCategory.MEMORY_LEAK,
+                    confidence=0.75,  # Lower confidence without trend data
+                    evidence=signals + memory_warnings[:2],
+                    recommended_action="RESTART",
+                    reasoning=(
+                        "Multiple signals indicate memory leak: "
+                        f"{', '.join(signals)}. "
+                        "(Trend analysis unavailable - using static threshold). "
+                        "RESTART will clear leaked memory and restore normal operation."
+                    ),
+                )
+
         return None
 
-    def _check_cpu_saturation(
+    async def _check_cpu_saturation(
         self,
         alert_name: str,
         metrics: dict[str, Optional[float]],
     ) -> Optional[RuleMatch]:
         """
-        Detect CPU saturation (not a spike, but sustained high usage).
+        Detect CPU saturation using trend analysis for EFFICIENCY variant (Workstream 2).
 
-        Pattern: CPU alert + high CPU usage but NO traffic spike
-        Confidence: 0.85
-        Action: RESTART (likely stuck loop/deadlock) or SCALE (if traffic is normal)
+        Two variants:
+        1. CPU_SATURATION_TRAFFIC: High CPU + high traffic → SCALE (synchronous, no trend needed)
+        2. CPU_SATURATION_EFFICIENCY: Rising CPU + normal traffic → RESTART (uses trend analysis)
+
+        Confidence: 0.85 (traffic), 0.82 (efficiency with trend), 0.70 (efficiency static fallback)
         """
+        from trend_analysis import TrendClassifier
+
         is_cpu_alert = "CPU" in alert_name or "Saturation" in alert_name
         if not is_cpu_alert:
             return None
@@ -314,15 +384,16 @@ class RuleEngine:
             return None
 
         # High CPU defined as >80%
-        is_high_cpu = cpu_usage > 80.0
+        STATIC_CPU_THRESHOLD = 80.0
+        is_high_cpu = cpu_usage > STATIC_CPU_THRESHOLD
 
         # Check if traffic is also high (would explain high CPU)
-        # If traffic is normal but CPU is high → likely an efficiency issue (stuck loop)
-        is_traffic_spike = request_rate and request_rate > 1000  # Example threshold
+        TRAFFIC_THRESHOLD = 1000  # rps
+        is_traffic_spike = request_rate and request_rate > TRAFFIC_THRESHOLD
 
         if is_high_cpu:
             if is_traffic_spike:
-                # High CPU + high traffic → scale out
+                # VARIANT 1: High CPU + high traffic → scale out (SYNCHRONOUS, no trend needed)
                 return RuleMatch(
                     matched=True,
                     rule_name="CPU_SATURATION_TRAFFIC",
@@ -339,22 +410,76 @@ class RuleEngine:
                     ),
                 )
             else:
-                # High CPU + normal traffic → efficiency problem
-                return RuleMatch(
-                    matched=True,
-                    rule_name="CPU_SATURATION_EFFICIENCY",
-                    root_cause=RootCauseCategory.CPU_SATURATION,
-                    confidence=0.82,
-                    evidence=[
-                        f"CPU usage: {cpu_usage:.1f}%",
-                        f"Request rate: {request_rate or 0:.1f} rps (normal)",
-                    ],
-                    recommended_action="RESTART",
-                    reasoning=(
-                        "High CPU with normal traffic suggests inefficiency "
-                        "(e.g., stuck loop, goroutine leak). RESTART to reset state."
-                    ),
-                )
+                # VARIANT 2: High CPU + normal traffic → efficiency problem (USE TREND ANALYSIS)
+                # This distinguishes runaway CPU (leak, stuck loop) from legitimate baseline
+
+                classifier = TrendClassifier()
+                try:
+                    # Use CPU user time as the metric (more precise than cpu_usage_percent)
+                    cpu_trend = await classifier.analyze_metric(
+                        metric_expr='rate(process_cpu_seconds_total{job="target-service"}[5m])',
+                        slope_threshold=0.01,  # 1% increase per second = runaway
+                        window_minutes=10,
+                        step_seconds=30,
+                    )
+
+                    if not cpu_trend.is_rising:
+                        # CPU is high but stable → legitimate load, not runaway
+                        log.debug(
+                            "CPU usage is elevated (%.1f%%) but stable (slope=%.4f) — not runaway",
+                            cpu_usage,
+                            cpu_trend.slope,
+                        )
+                        return None
+
+                    # Trend-based efficiency match (high confidence)
+                    confidence = 0.82
+                    signals = [
+                        f"CPU rising from {cpu_trend.start_value * 100:.1f}% → {cpu_trend.end_value * 100:.1f}% "
+                        f"over {cpu_trend.window_duration_sec / 60:.0f}min (slope: {cpu_trend.slope * 100:.2f}%/sec)",
+                        f"Current CPU: {cpu_usage:.1f}% (threshold: {STATIC_CPU_THRESHOLD}%)",
+                        f"Request rate: {request_rate or 0:.1f} rps (normal, not traffic-driven)",
+                        f"Trend confidence: {cpu_trend.confidence:.2f} (R² fit)",
+                    ]
+
+                    return RuleMatch(
+                        matched=True,
+                        rule_name="CPU_SATURATION_EFFICIENCY",
+                        root_cause=RootCauseCategory.CPU_SATURATION,
+                        confidence=min(1.0, confidence),
+                        evidence=signals,
+                        recommended_action="RESTART",
+                        reasoning=(
+                            f"Detected runaway CPU: usage has grown from {cpu_trend.start_value * 100:.1f}% to "
+                            f"{cpu_trend.end_value * 100:.1f}% over the past {cpu_trend.window_duration_sec / 60:.0f}min "
+                            f"with sustained positive slope ({cpu_trend.slope * 100:.2f}%/sec) despite normal traffic. "
+                            "This indicates inefficiency (stuck loop, goroutine leak, or algorithmic issue). "
+                            "RESTART to reset state."
+                        ),
+                    )
+
+                except Exception as exc:
+                    log.warning("Trend analysis failed for CPU efficiency detection, falling back to static threshold: %s", exc)
+
+                    # FALLBACK: Static threshold logic (lower confidence)
+                    return RuleMatch(
+                        matched=True,
+                        rule_name="CPU_SATURATION_EFFICIENCY",
+                        root_cause=RootCauseCategory.CPU_SATURATION,
+                        confidence=0.70,  # Lower confidence without trend data
+                        evidence=[
+                            f"CPU usage: {cpu_usage:.1f}% (threshold: {STATIC_CPU_THRESHOLD}%)",
+                            f"Request rate: {request_rate or 0:.1f} rps (normal)",
+                        ],
+                        recommended_action="RESTART",
+                        reasoning=(
+                            "High CPU with normal traffic suggests inefficiency "
+                            "(e.g., stuck loop, goroutine leak). "
+                            "(Trend analysis unavailable - using static threshold). "
+                            "RESTART to reset state."
+                        ),
+                    )
+
         return None
 
     def _check_traffic_spike(
@@ -567,8 +692,27 @@ class RuleEngine:
                 return None
 
         except Exception as exc:
-            log.warning("Trend analysis failed for goroutine leak detection: %s", exc)
-            return None  # Can't detect leak without trend data
+            log.warning("Trend analysis failed for goroutine leak detection, falling back to static threshold: %s", exc)
+
+            # FALLBACK: Static threshold only (lower confidence)
+            signals = [
+                f"Goroutine count: {current_goroutines:.0f} (threshold: {absolute_threshold:.0f})",
+                "(Trend analysis unavailable - using static threshold)",
+            ]
+
+            return RuleMatch(
+                matched=True,
+                rule_name="GOROUTINE_LEAK",
+                root_cause=RootCauseCategory.GOROUTINE_LEAK,
+                confidence=0.70,  # Lower confidence without trend data
+                evidence=signals,
+                recommended_action="RESTART",
+                reasoning=(
+                    f"Goroutine count ({current_goroutines:.0f}) exceeds threshold ({absolute_threshold:.0f}). "
+                    "Trend analysis unavailable - using static threshold. "
+                    "RESTART will terminate goroutines and restore normal operation."
+                ),
+            )
 
         # Base confidence: trend + absolute threshold matched
         confidence = 0.85
