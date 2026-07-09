@@ -34,6 +34,7 @@ class IncidentReport:
 
     # Core identification
     incident_id: str          # Same as alert_id
+    trace_id: str | None      # W3C trace ID for correlating with Tempo/Jaeger traces
     detected_at: str          # ISO timestamp from alert.starts_at
     resolved_at: str          # ISO timestamp when processing complete
     duration_ms: int          # detected_at → resolved_at in milliseconds
@@ -145,8 +146,12 @@ def build_report(analysis: dict[str, Any]) -> IncidentReport:
     policy_blocked = analysis.get("policy_blocked", False)
     approval_required = analysis.get("approval_required", False)
 
+    # Extract trace_id (may be in alert_labels or directly in analysis)
+    trace_id = analysis.get("alert_labels", {}).get("trace_id") or analysis.get("trace_id")
+
     return IncidentReport(
         incident_id=analysis.get("alert_id", "unknown"),
+        trace_id=trace_id,
         detected_at=starts_at or analyzed_at,  # Fallback to analyzed_at if starts_at missing
         resolved_at=analyzed_at,
         duration_ms=duration_ms,

@@ -27,6 +27,7 @@ volumes:
   grafana_data:
   redis_data:
   postgres_data:
+  tempo_data:
 
 services:
 
@@ -213,6 +214,31 @@ services:
       com.aether-guard.component: "agent"
       com.aether-guard.phase: "3"
 
+  # ── Grafana Tempo (Distributed Tracing) ──────────────────────────────────
+  tempo:
+    image: grafana/tempo:2.3.1
+    container_name: tempo
+    ports:
+      - "3200:3200"  # Tempo HTTP API
+      - "4317:4317"  # OTLP gRPC
+      - "4318:4318"  # OTLP HTTP
+    volumes:
+      - ./tempo/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo_data:/tmp/tempo
+    command:
+      - "-config.file=/etc/tempo.yaml"
+    restart: unless-stopped
+    networks:
+      - aether-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3200/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    labels:
+      com.aether-guard.component: "tempo"
+      com.aether-guard.phase: "5-priority5"
+
   # ── Grafana ───────────────────────────────────────────────────────────────
   grafana:
     image: grafana/grafana:10.3.1
@@ -235,6 +261,7 @@ services:
       - aether-net
     depends_on:
       - prometheus
+      - tempo
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
       interval: 10s

@@ -48,6 +48,9 @@ CREATE TABLE IF NOT EXISTS incident_reports (
     -- Primary key
     incident_id VARCHAR(255) PRIMARY KEY,
 
+    -- Tracing (W3C trace ID for correlating with Tempo/Jaeger)
+    trace_id VARCHAR(32),
+
     -- Timestamps (indexed for time-series queries)
     detected_at TIMESTAMPTZ NOT NULL,
     resolved_at TIMESTAMPTZ NOT NULL,
@@ -206,7 +209,7 @@ class IncidentStorage:
             await cur.execute(
                 """
                 INSERT INTO incident_reports (
-                    incident_id, detected_at, resolved_at, duration_ms,
+                    incident_id, trace_id, detected_at, resolved_at, duration_ms,
                     trigger, matched_pattern, confidence, root_cause, reasoning,
                     action_taken, remediation_outcome,
                     verification_performed, verification_result, auto_rollback_triggered,
@@ -214,7 +217,7 @@ class IncidentStorage:
                     override_status, override_reason, override_at, override_by,
                     full_analysis
                 ) VALUES (
-                    %(incident_id)s, %(detected_at)s, %(resolved_at)s, %(duration_ms)s,
+                    %(incident_id)s, %(trace_id)s, %(detected_at)s, %(resolved_at)s, %(duration_ms)s,
                     %(trigger)s, %(matched_pattern)s, %(confidence)s, %(root_cause)s, %(reasoning)s,
                     %(action_taken)s, %(remediation_outcome)s,
                     %(verification_performed)s, %(verification_result)s, %(auto_rollback_triggered)s,
@@ -223,6 +226,7 @@ class IncidentStorage:
                     %(full_analysis)s::jsonb
                 )
                 ON CONFLICT (incident_id) DO UPDATE SET
+                    trace_id = EXCLUDED.trace_id,
                     resolved_at = EXCLUDED.resolved_at,
                     duration_ms = EXCLUDED.duration_ms,
                     outcome = EXCLUDED.outcome,
@@ -237,6 +241,7 @@ class IncidentStorage:
                 """,
                 {
                     "incident_id": report.incident_id,
+                    "trace_id": report.trace_id,
                     "detected_at": report.detected_at,
                     "resolved_at": report.resolved_at,
                     "duration_ms": report.duration_ms,
@@ -294,6 +299,7 @@ class IncidentStorage:
                         # Note: full_analysis is already a dict (JSONB)
                         return IncidentReport(
                             incident_id=row["incident_id"],
+                            trace_id=row.get("trace_id"),
                             detected_at=row["detected_at"].isoformat(),
                             resolved_at=row["resolved_at"].isoformat(),
                             duration_ms=row["duration_ms"],
@@ -347,6 +353,7 @@ class IncidentStorage:
                 return [
                     IncidentReport(
                         incident_id=row["incident_id"],
+                        trace_id=row.get("trace_id"),
                         detected_at=row["detected_at"].isoformat(),
                         resolved_at=row["resolved_at"].isoformat(),
                         duration_ms=row["duration_ms"],
@@ -402,6 +409,7 @@ class IncidentStorage:
                 return [
                     IncidentReport(
                         incident_id=row["incident_id"],
+                        trace_id=row.get("trace_id"),
                         detected_at=row["detected_at"].isoformat(),
                         resolved_at=row["resolved_at"].isoformat(),
                         duration_ms=row["duration_ms"],

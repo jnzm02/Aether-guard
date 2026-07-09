@@ -29,6 +29,9 @@ from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from alert_summary import send_daily_summary
+import tracing  # OpenTelemetry setup
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Logging
@@ -38,6 +41,13 @@ logging.basicConfig(
     format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
 )
 log = logging.getLogger("aether-guard.listener")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OpenTelemetry Tracing
+# ─────────────────────────────────────────────────────────────────────────────
+tracer = tracing.init_tracing()
+tracing.instrument_httpx()  # Auto-instrument httpx for Prometheus queries
+log.info("Distributed tracing initialized (Tempo backend)")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Config (injectable via environment variables)
@@ -126,6 +136,9 @@ app = FastAPI(
     openapi_tags=_LISTENER_TAGS,
     lifespan=lifespan,
 )
+
+# Instrument FastAPI for automatic span creation (excludes health/metrics endpoints)
+tracing.instrument_fastapi(app)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pydantic models
@@ -281,11 +294,15 @@ def fetch_container_logs(container_name: str, tail: int = 100) -> list[str]:
 # Alert enrichment pipeline
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def enrich_alert(raw: dict) -> dict:
+async def enrich_alert(raw: dict, trace_id: str | None = None) -> dict:
     """
     Given a raw Alertmanager alert object, produce an enriched record that
     bundles the alert metadata with a live Prometheus snapshot and log tail.
     This is the data payload the Phase 3 AI Agent will reason over.
+
+    Args:
+        raw: Raw alert from Alertmanager webhook
+        trace_id: W3C trace ID from current span (for trace correlation)
     """
     # Run Prometheus query and log fetch concurrently.
     metrics_snapshot, log_tail = await asyncio.gather(
@@ -312,6 +329,8 @@ async def enrich_alert(raw: dict) -> dict:
         "processed_by_ai":  False,
         "ai_analysis":      None,
         "action_taken":     None,
+        # ── Distributed Tracing (Priority 5) ─────────────────────────────────
+        "trace_id":        trace_id,  # W3C trace ID for correlating with Tempo traces
     }
 
 
@@ -336,6 +355,8 @@ async def receive_webhook(request: Request):
 
     Alertmanager sends a single POST per group-interval with a batch of alerts.
     We enrich each alert concurrently and append to the queue.
+
+    Priority 5: Creates root span for each incoming alert (trace starts here).
     """
     payload = await request.json()
     raw_alerts: list[dict] = payload.get("alerts", [])
@@ -356,14 +377,49 @@ async def receive_webhook(request: Request):
         del alert_queue[:overflow]
         log.warning("Alert queue trimmed by %d entries to stay within cap", overflow)
 
-    enriched = await asyncio.gather(*[enrich_alert(a) for a in raw_alerts])
+    # Enrich each alert within its own root span for distributed tracing
+    enriched = []
+    for raw_alert in raw_alerts:
+        alertname = raw_alert.get("labels", {}).get("alertname", "unknown")
+
+        # Create ROOT SPAN for this alert (trace begins here)
+        # No parent context from Alertmanager - we start the trace
+        with tracer.start_as_current_span(
+            f"alert_received:{alertname}",
+            kind=trace.SpanKind.SERVER,
+        ) as span:
+            # Capture trace ID for storage
+            span_context = span.get_span_context()
+            trace_id = format(span_context.trace_id, '032x') if span_context.is_valid else None
+
+            if trace_id:
+                log.info("Creating root trace for alert %s: trace_id=%s", alertname, trace_id)
+
+            # Add alert metadata to span
+            span.set_attribute("alert.name", alertname)
+            span.set_attribute("alert.status", raw_alert.get("status", "unknown"))
+            span.set_attribute("alert.severity", raw_alert.get("labels", {}).get("severity", "unknown"))
+
+            try:
+                # Enrich alert (creates child spans automatically for httpx calls)
+                alert = await enrich_alert(raw_alert, trace_id=trace_id)
+                enriched.append(alert)
+                span.set_status(Status(StatusCode.OK))
+            except Exception as exc:
+                span.set_status(Status(StatusCode.ERROR, str(exc)))
+                span.record_exception(exc)
+                log.error("Failed to enrich alert %s: %s", alertname, exc)
+                raise
+
+    # Append enriched alerts to queue
     for alert in enriched:
         alert_queue.append(alert)
         log.info(
-            "  ↳ enqueued  id=%s  alertname=%s  status=%s",
+            "  ↳ enqueued  id=%s  alertname=%s  status=%s  trace_id=%s",
             alert["id"],
             alert["labels"].get("alertname", "?"),
             alert["status"],
+            alert.get("trace_id", "none"),
         )
 
     return {"status": "accepted", "enqueued": len(enriched)}
