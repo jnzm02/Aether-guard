@@ -4,13 +4,14 @@ Unit tests for rules.py — Rule-based incident triage engine.
 Tests cover all 7 rule patterns:
 1. OOM kill detection (confidence 0.95)
 2. Restart loop detection (confidence 0.92)
-3. Memory leak detection (confidence 0.88)
-4. CPU saturation detection (confidence 0.82-0.85)
+3. Memory leak detection (confidence 0.88 trend-based, 0.75 fallback)
+4. CPU saturation detection (confidence 0.82/0.70 efficiency, 0.85 traffic)
 5. Traffic spike detection (confidence 0.87)
 6. Dependency failure detection (confidence 0.75)
 7. Bad deployment detection (confidence 0.78)
 
 Plus edge cases, no-match scenarios, and confidence scoring.
+Note: Workstream 2 added trend-based detection with static fallback for patterns 3-4.
 """
 
 import pytest
@@ -141,7 +142,7 @@ class TestRestartLoopRule:
 # ── Memory Leak Rule Tests ─────────────────────────────────────────────────────
 
 class TestMemoryLeakRule:
-    """Test memory leak detection (confidence 0.88)."""
+    """Test memory leak detection (confidence 0.88 trend-based, 0.75 fallback)."""
 
     @pytest.mark.asyncio
     async def test_memory_leak_detected(self, engine, empty_logs):
@@ -161,7 +162,7 @@ class TestMemoryLeakRule:
 
         assert result is not None
         assert result.rule_name == "MEMORY_LEAK"
-        assert result.confidence == 0.88
+        assert result.confidence == 0.75  # Fallback mode (Prometheus unavailable in test env)
         assert result.root_cause == RootCauseCategory.MEMORY_LEAK
         assert result.recommended_action == "RESTART"
         assert len(result.evidence) >= 2  # Multiple signals
@@ -195,7 +196,7 @@ class TestMemoryLeakRule:
 # ── CPU Saturation Rule Tests ──────────────────────────────────────────────────
 
 class TestCPUSaturationRule:
-    """Test CPU saturation detection (confidence 0.82-0.85)."""
+    """Test CPU saturation detection (confidence 0.82/0.70 efficiency, 0.85 traffic)."""
 
     @pytest.mark.asyncio
     async def test_cpu_saturation_with_traffic_spike(self, engine, empty_logs):
@@ -231,7 +232,7 @@ class TestCPUSaturationRule:
 
         assert result is not None
         assert result.rule_name == "CPU_SATURATION_EFFICIENCY"
-        assert result.confidence == 0.82
+        assert result.confidence == 0.70  # Fallback mode (Prometheus unavailable in test env)
         assert result.root_cause == RootCauseCategory.CPU_SATURATION
         assert result.recommended_action == "RESTART"
 
@@ -520,8 +521,8 @@ class TestEdgeCases:
         ]
         result = await engine.analyze(alert, metrics, logs)
 
-        # CPU saturation rule (0.82) should match before dependency failure (0.75)
-        # because CPU rules are evaluated first in the priority order
+        # CPU saturation rule (0.70 fallback) should match before dependency failure (0.75)
+        # because CPU rules are evaluated first in the priority order (before dependency checks)
         assert result.rule_name == "CPU_SATURATION_EFFICIENCY"
 
     @pytest.mark.asyncio

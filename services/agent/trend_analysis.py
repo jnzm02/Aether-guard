@@ -180,15 +180,9 @@ class TrendClassifier:
 
         except Exception as exc:
             log.error("Trend analysis failed for '%s': %s", metric_expr, exc)
-            return TrendAnalysis(
-                is_rising=False,
-                slope=0.0,
-                confidence=0.0,
-                data_points=0,
-                window_duration_sec=window_duration_sec,
-                start_value=None,
-                end_value=None,
-            )
+            # Re-raise exception to allow caller to handle fallback logic
+            # (Workstream 2: rules.py catches this and falls back to static thresholds)
+            raise
 
     def _linear_regression(
         self, x_values: list[float], y_values: list[float]
