@@ -1,0 +1,19 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Aether-Guard — Terraform Variables Template
+# ─────────────────────────────────────────────────────────────────────────────
+# IMPORTANT: Copy this to terraform.tfvars and fill in real values.
+#            NEVER commit terraform.tfvars to git!
+# ─────────────────────────────────────────────────────────────────────────────
+
+# DigitalOcean API token (get from https://cloud.digitalocean.com/account/api/tokens)
+do_token = "dop_v1_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# Anthropic API key (for the AI agent)
+anthropic_api_key = "sk-ant-api03-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# Optional overrides (defaults are fine for demo):
+# region       = "nyc3"
+# cluster_name = "aether-guard-demo"
+# node_size    = "s-1vcpu-2gb"  # $18/month
+# node_count   = 1
+# db_size      = "db-s-1vcpu-1gb"  # $15/month

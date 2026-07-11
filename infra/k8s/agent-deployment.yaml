@@ -1,0 +1,79 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent
+  namespace: aether-guard
+  labels:
+    app: agent
+  annotations:
+    service.beta.kubernetes.io/do-loadbalancer-name: "aether-guard-agent-lb"
+    service.beta.kubernetes.io/do-loadbalancer-protocol: "http"
+spec:
+  type: LoadBalancer  # Exposed publicly for listener webhook
+  ports:
+    - port: 80
+      targetPort: 8082
+      protocol: TCP
+      name: http
+  selector:
+    app: agent
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent
+  namespace: aether-guard
+  labels:
+    app: agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: agent
+  template:
+    metadata:
+      labels:
+        app: agent
+    spec:
+      containers:
+        - name: agent
+          image: aether-guard/agent:latest
+          imagePullPolicy: Never  # Built locally, not pushed to registry
+          ports:
+            - containerPort: 8082
+          env:
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aether-guard-secrets
+                  key: anthropic-api-key
+            - name: POSTGRES_URL
+              valueFrom:
+                secretKeyRef:
+                  name: aether-guard-secrets
+                  key: postgres-url
+            - name: REDIS_URL
+              value: "redis://redis:6379/0"
+            - name: LISTENER_URL
+              value: "http://listener:8081"  # If listener were in-cluster (it's not for this demo)
+            - name: ANALYSIS_LOG_PATH
+              value: "/app/data/analyses.jsonl"
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8082
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8082
+            initialDelaySeconds: 10
+            periodSeconds: 5

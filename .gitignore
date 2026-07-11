@@ -1,5 +1,11 @@
 # ── Secrets — never commit these ──────────────────────────────────────────────
 .env
+infra/terraform/terraform.tfvars
+infra/terraform/.terraform/
+infra/terraform/.terraform.lock.hcl
+infra/terraform/terraform.tfstate
+infra/terraform/terraform.tfstate.backup
+infra/k8s/secrets.yaml
 
 # ── Go build artifacts ─────────────────────────────────────────────────────────
 services/target-service/target-service

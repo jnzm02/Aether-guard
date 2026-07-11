@@ -1,0 +1,62 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: target-service
+  namespace: aether-guard
+  labels:
+    app: target-service
+spec:
+  type: ClusterIP  # Internal only (agent reaches it, not external)
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+      name: http
+  selector:
+    app: target-service
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: target-service
+  namespace: aether-guard
+  labels:
+    app: target-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: target-service
+  template:
+    metadata:
+      labels:
+        app: target-service
+    spec:
+      containers:
+        - name: target-service
+          image: aether-guard/target-service:latest
+          imagePullPolicy: Never  # Built locally, not pushed to registry
+          ports:
+            - containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
