@@ -412,6 +412,7 @@ async def analyze_alert(alert: dict) -> dict[str, Any]:
 
         # ────────────────────────────────────────────────────────────────────────
         # V1/V2: LLM analysis (fallback or primary path)
+        # Priority 8: RAG-augmented multi-step investigation (Phase B+C)
         # ────────────────────────────────────────────────────────────────────────
         if raw_analysis is None:
             with tracer.start_as_current_span("llm_analysis") as llm_span:
@@ -419,47 +420,70 @@ async def analyze_alert(alert: dict) -> dict[str, Any]:
                     log.info("⚡ No high-confidence rule match — using LLM analysis")
 
                 llm_span.set_attribute("llm.model", CLAUDE_MODEL)
-                user_prompt = build_user_prompt(alert)
 
-                last_error: Exception | None = None
+                # Phase C: Try RAG investigation graph first, fall back to single-call LLM
+                rag_enabled = os.getenv("RAG_ENABLED", "true").lower() == "true"
 
-                for attempt in range(1, 4):
+                if rag_enabled:
                     try:
-                        raw_analysis = await call_claude(user_prompt, attempt=attempt)
-                        rca_method = "llm-assisted"
-                        llm_span.set_attribute("llm.attempts", attempt)
-                        llm_span.set_attribute("llm.success", True)
-                        break
-                    except ValueError as exc:
-                        last_error = exc
-                        log.warning("Parse attempt %d failed: %s", attempt, exc)
-                        await asyncio.sleep(1)
-                    except anthropic.RateLimitError as exc:
-                        last_error = exc
-                        wait = 30
-                        log.warning("Rate limited — waiting %ds", wait)
-                        await asyncio.sleep(wait)
-                    except anthropic.APIError as exc:
-                        last_error = exc
-                        log.error("Claude API error (attempt %d): %s", attempt, exc)
-                        _stats["api_errors"] += 1
-                        await asyncio.sleep(5)
+                        from investigation_graph import run_investigation_graph
+                        log.info("Starting RAG investigation (Priority 8)")
+                        raw_analysis = await run_investigation_graph(alert)
+                        rca_method = "rag-investigation"
+                        llm_span.set_attribute("rag.enabled", True)
+                        llm_span.set_attribute("rag.success", True)
+                        if "rag_metadata" in raw_analysis:
+                            llm_span.set_attribute("rag.iterations", raw_analysis["rag_metadata"].get("iteration_count", 0))
+                            llm_span.set_attribute("rag.similar_incidents", raw_analysis["rag_metadata"].get("similar_incidents_retrieved", 0))
+                    except Exception as exc:
+                        log.warning("RAG investigation failed: %s — falling back to single-call LLM", exc)
+                        llm_span.set_attribute("rag.enabled", True)
+                        llm_span.set_attribute("rag.success", False)
+                        llm_span.set_attribute("rag.fallback", True)
+                        raw_analysis = None  # Fall through to single-call LLM below
 
+                # Original single-call LLM fallback (V1 path or RAG failure fallback)
                 if raw_analysis is None:
-                    # All attempts failed — produce a safe fallback record
-                    log.error("All Claude attempts failed for alert %s: %s", alert_id, last_error)
-                    llm_span.set_attribute("llm.success", False)
-                    llm_span.set_attribute("llm.error", str(last_error))
-                    raw_analysis = {
-                        "analysis":             f"Agent failed to produce analysis after 3 attempts: {last_error}",
-                        "root_cause":           "Unknown — analysis failed",
-                        "confidence":           0.0,
-                        "action":               "IGNORE",
-                        "reasoning":            "Defaulting to IGNORE due to analysis failure.",
-                        "slo_impact":           "unknown",
-                        "recommended_followup": "Investigate manually — agent could not complete RCA.",
-                    }
-                    rca_method = "fallback-error"
+                    user_prompt = build_user_prompt(alert)
+                    last_error: Exception | None = None
+
+                    for attempt in range(1, 4):
+                        try:
+                            raw_analysis = await call_claude(user_prompt, attempt=attempt)
+                            rca_method = "llm-assisted"
+                            llm_span.set_attribute("llm.attempts", attempt)
+                            llm_span.set_attribute("llm.success", True)
+                            break
+                        except ValueError as exc:
+                            last_error = exc
+                            log.warning("Parse attempt %d failed: %s", attempt, exc)
+                            await asyncio.sleep(1)
+                        except anthropic.RateLimitError as exc:
+                            last_error = exc
+                            wait = 30
+                            log.warning("Rate limited — waiting %ds", wait)
+                            await asyncio.sleep(wait)
+                        except anthropic.APIError as exc:
+                            last_error = exc
+                            log.error("Claude API error (attempt %d): %s", attempt, exc)
+                            _stats["api_errors"] += 1
+                            await asyncio.sleep(5)
+
+                    if raw_analysis is None:
+                        # All attempts failed — produce a safe fallback record
+                        log.error("All Claude attempts failed for alert %s: %s", alert_id, last_error)
+                        llm_span.set_attribute("llm.success", False)
+                        llm_span.set_attribute("llm.error", str(last_error))
+                        raw_analysis = {
+                            "analysis":             f"Agent failed to produce analysis after 3 attempts: {last_error}",
+                            "root_cause":           "Unknown — analysis failed",
+                            "confidence":           0.0,
+                            "action":               "IGNORE",
+                            "reasoning":            "Defaulting to IGNORE due to analysis failure.",
+                            "slo_impact":           "unknown",
+                            "recommended_followup": "Investigate manually — agent could not complete RCA.",
+                        }
+                        rca_method = "fallback-error"
 
         rca_span.set_attribute("rca.method", rca_method)
         rca_span.set_attribute("rca.confidence", raw_analysis.get("confidence", 0.0))

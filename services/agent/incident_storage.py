@@ -41,6 +41,9 @@ REDIS_TTL_SECONDS = 172800
 # ── Postgres Schema ───────────────────────────────────────────────────────────
 
 _SCHEMA_DDL = """
+-- Priority 8: Enable pgvector extension for RAG similarity search
+CREATE EXTENSION IF NOT EXISTS vector;
+
 -- Incident Reports Table
 -- Optimized for querying by matched_pattern, outcome, detected_at (trust metrics)
 
@@ -90,6 +93,10 @@ CREATE TABLE IF NOT EXISTS incident_reports (
     -- Full analysis (JSONB for deep queries)
     full_analysis JSONB NOT NULL,
 
+    -- Priority 8: Embedding for RAG similarity search
+    -- Voyage-3 produces 1024-dimensional embeddings (normalized to unit length)
+    embedding vector(1024),
+
     -- Audit timestamp
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -104,6 +111,16 @@ CREATE INDEX IF NOT EXISTS idx_detected_at_pattern ON incident_reports (detected
 -- Partial index for override queries (only indexes overridden incidents for efficiency)
 CREATE INDEX IF NOT EXISTS idx_override_status ON incident_reports (override_status)
     WHERE override_status != 'none';
+
+-- Priority 8: HNSW index for fast vector similarity search (L2 distance)
+-- m=16, ef_construction=64: Standard parameters for HNSW (balance speed vs accuracy)
+-- L2 distance choice: Voyage AI voyage-3 embeddings are normalized to unit length
+-- (confirmed via WebSearch of https://docs.voyageai.com/docs/faq - January 2025).
+-- For unit-length vectors, L2 distance produces identical rankings as cosine similarity.
+-- L2 is faster to compute, so we use vector_l2_ops instead of vector_cosine_ops.
+CREATE INDEX IF NOT EXISTS idx_embedding_hnsw ON incident_reports
+    USING hnsw (embedding vector_l2_ops)
+    WITH (m = 16, ef_construction = 64);
 """
 
 
@@ -175,10 +192,23 @@ class IncidentStorage:
         """
         Save incident report to both Redis (48h TTL) and Postgres (permanent).
 
-        Graceful degradation: Logs warning if one storage fails, but continues.
+        Priority 8: Generates embedding via Voyage AI for RAG similarity search.
+        Graceful degradation: Logs warning if embedding or storage fails, but continues.
         """
         report_dict = report.as_dict()
         incident_id = report.incident_id
+
+        # Priority 8: Generate embedding (gracefully skip if Voyage API unavailable)
+        embedding = None
+        try:
+            from embedding import generate_embedding, compose_embedding_text
+            text = compose_embedding_text(report)
+            embedding = await generate_embedding(text)
+            log.debug("Embedding generated for incident %s (dim=%d)", incident_id, len(embedding))
+        except ImportError:
+            log.debug("Embedding module not available — skipping embedding generation")
+        except Exception as exc:
+            log.warning("Failed to generate embedding for %s: %s", incident_id, exc)
 
         # Save to Redis (48h TTL)
         if self._redis_available and self._redis:
@@ -189,10 +219,10 @@ class IncidentStorage:
             except Exception as exc:
                 log.warning("Failed to save incident %s to Redis: %s", incident_id, exc)
 
-        # Save to Postgres (permanent)
+        # Save to Postgres (permanent) with embedding
         if self._postgres_available and self._postgres:
             try:
-                await self._insert_postgres(report)
+                await self._insert_postgres(report, embedding)
                 log.debug("Incident %s saved to Postgres", incident_id)
 
                 # Priority 2: Record Prometheus metrics
@@ -200,10 +230,19 @@ class IncidentStorage:
             except Exception as exc:
                 log.warning("Failed to save incident %s to Postgres: %s", incident_id, exc)
 
-    async def _insert_postgres(self, report: IncidentReport) -> None:
-        """Insert incident report into Postgres (upsert on conflict)."""
+    async def _insert_postgres(self, report: IncidentReport, embedding: list[float] | None = None) -> None:
+        """
+        Insert incident report into Postgres (upsert on conflict).
+
+        Priority 8: Accepts optional embedding vector for RAG similarity search.
+        """
         if not self._postgres:
             return
+
+        # Convert embedding to PostgreSQL vector format: "[0.1, 0.2, ...]"
+        embedding_str = None
+        if embedding:
+            embedding_str = f"[{','.join(map(str, embedding))}]"
 
         async with self._postgres.cursor() as cur:
             await cur.execute(
@@ -215,7 +254,7 @@ class IncidentStorage:
                     verification_performed, verification_result, auto_rollback_triggered,
                     outcome, rca_method, policy_blocked, approval_required, severity,
                     override_status, override_reason, override_at, override_by,
-                    full_analysis
+                    full_analysis, embedding
                 ) VALUES (
                     %(incident_id)s, %(trace_id)s, %(detected_at)s, %(resolved_at)s, %(duration_ms)s,
                     %(trigger)s, %(matched_pattern)s, %(confidence)s, %(root_cause)s, %(reasoning)s,
@@ -223,7 +262,7 @@ class IncidentStorage:
                     %(verification_performed)s, %(verification_result)s, %(auto_rollback_triggered)s,
                     %(outcome)s, %(rca_method)s, %(policy_blocked)s, %(approval_required)s, %(severity)s,
                     %(override_status)s, %(override_reason)s, %(override_at)s, %(override_by)s,
-                    %(full_analysis)s::jsonb
+                    %(full_analysis)s::jsonb, %(embedding)s::vector
                 )
                 ON CONFLICT (incident_id) DO UPDATE SET
                     trace_id = EXCLUDED.trace_id,
@@ -237,7 +276,8 @@ class IncidentStorage:
                     override_reason = EXCLUDED.override_reason,
                     override_at = EXCLUDED.override_at,
                     override_by = EXCLUDED.override_by,
-                    full_analysis = EXCLUDED.full_analysis
+                    full_analysis = EXCLUDED.full_analysis,
+                    embedding = EXCLUDED.embedding
                 """,
                 {
                     "incident_id": report.incident_id,
@@ -265,6 +305,7 @@ class IncidentStorage:
                     "override_at": report.override_at,
                     "override_by": report.override_by,
                     "full_analysis": json.dumps(report.full_analysis),
+                    "embedding": embedding_str,
                 },
             )
 
@@ -782,6 +823,158 @@ class IncidentStorage:
         except Exception as exc:
             log.error("Failed to compute trust metrics: %s", exc)
             return {"error": str(exc)}
+
+    # ── Priority 8: RAG Similarity Search ─────────────────────────────────────
+
+    async def find_similar_incidents(
+        self,
+        query_embedding: list[float],
+        limit: int = 5,
+        min_confidence: float | None = None,
+    ) -> list[dict]:
+        """
+        Find top-k most similar past incidents using vector similarity search.
+
+        Priority 8: Retrieves similar incidents for RAG-based investigation,
+        including override_status and override_reason to surface past corrections.
+
+        Args:
+            query_embedding: 1024-dim embedding from Voyage AI
+            limit: Max incidents to return (default 5)
+            min_confidence: Only return incidents with confidence >= this threshold
+                           (defaults to SIMILARITY_MIN_CONFIDENCE env var or 0.7)
+
+        Returns:
+            List of dicts with {incident_id, trigger, root_cause, reasoning,
+                                matched_pattern, confidence, outcome, action_taken,
+                                override_status, override_reason, detected_at, distance}
+            Sorted by distance ascending (most similar first)
+        """
+        if not self._postgres_available or not self._postgres:
+            log.warning("Postgres unavailable — cannot perform similarity search")
+            return []
+
+        # Use env var default if min_confidence not specified
+        if min_confidence is None:
+            min_confidence = float(os.getenv("SIMILARITY_MIN_CONFIDENCE", "0.7"))
+
+        try:
+            # Convert embedding to PostgreSQL vector format: "[0.1, 0.2, ...]"
+            embedding_str = f"[{','.join(map(str, query_embedding))}]"
+
+            async with self._postgres.cursor() as cur:
+                await cur.execute(
+                    """
+                    SELECT
+                        incident_id, trigger, root_cause, reasoning, matched_pattern,
+                        confidence, outcome, action_taken, detected_at,
+                        override_status, override_reason,
+                        embedding <-> %s::vector AS distance
+                    FROM incident_reports
+                    WHERE
+                        embedding IS NOT NULL
+                        AND confidence >= %s
+                        AND rca_method != 'fallback-error'
+                    ORDER BY embedding <-> %s::vector
+                    LIMIT %s
+                    """,
+                    (embedding_str, min_confidence, embedding_str, limit),
+                )
+                rows = await cur.fetchall()
+
+            # Convert rows to dicts (psycopg dict_row already gives us dicts)
+            results = []
+            for row in rows:
+                results.append({
+                    "incident_id": row["incident_id"],
+                    "trigger": row["trigger"],
+                    "root_cause": row["root_cause"],
+                    "reasoning": row["reasoning"],
+                    "matched_pattern": row["matched_pattern"],
+                    "confidence": row["confidence"],
+                    "outcome": row["outcome"],
+                    "action_taken": row["action_taken"],
+                    "override_status": row["override_status"],
+                    "override_reason": row["override_reason"],
+                    "detected_at": row["detected_at"].isoformat() if row["detected_at"] else None,
+                    "distance": float(row["distance"]),
+                })
+
+            log.debug(
+                "Similarity search found %d incidents (limit=%d, min_confidence=%.2f)",
+                len(results), limit, min_confidence
+            )
+            return results
+
+        except Exception as exc:
+            log.error("Similarity search failed: %s", exc)
+            return []
+
+    async def get_all_without_embeddings(self, limit: int | None = None) -> list[dict]:
+        """
+        Get all incidents that don't have embeddings yet (for backfill script).
+
+        Returns:
+            List of incident dicts (not IncidentReport objects) with fields needed
+            for embedding generation (trigger, matched_pattern, root_cause, reasoning,
+            action_taken, outcome, incident_id)
+        """
+        if not self._postgres_available or not self._postgres:
+            log.warning("Postgres unavailable — cannot retrieve incidents for backfill")
+            return []
+
+        try:
+            query = """
+                SELECT incident_id, trigger, matched_pattern, root_cause, reasoning,
+                       action_taken, outcome, confidence
+                FROM incident_reports
+                WHERE embedding IS NULL
+                ORDER BY detected_at DESC
+            """
+            if limit:
+                query += f" LIMIT {int(limit)}"
+
+            async with self._postgres.cursor() as cur:
+                await cur.execute(query)
+                rows = await cur.fetchall()
+
+            log.info("Found %d incidents without embeddings", len(rows))
+            return [dict(row) for row in rows]
+
+        except Exception as exc:
+            log.error("Failed to query incidents without embeddings: %s", exc)
+            return []
+
+    async def update_embedding(self, incident_id: str, embedding: list[float]) -> bool:
+        """
+        Update embedding for an existing incident (used by backfill script).
+
+        Args:
+            incident_id: Incident to update
+            embedding: 1024-dim embedding vector from Voyage AI
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self._postgres_available or not self._postgres:
+            log.warning("Postgres unavailable — cannot update embedding")
+            return False
+
+        try:
+            embedding_str = f"[{','.join(map(str, embedding))}]"
+
+            async with self._postgres.cursor() as cur:
+                await cur.execute(
+                    "UPDATE incident_reports SET embedding = %s::vector WHERE incident_id = %s",
+                    (embedding_str, incident_id),
+                )
+
+            log.debug("Embedding updated for incident %s", incident_id)
+            return True
+
+        except Exception as exc:
+            log.error("Failed to update embedding for %s: %s", incident_id, exc)
+            return False
 
 
 # ── Convenience factory ───────────────────────────────────────────────────────

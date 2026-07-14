@@ -10,7 +10,7 @@
 ![Claude](https://img.shields.io/badge/Claude-Sonnet_4.5-8A2BE2)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker)
 ![Kubernetes](https://img.shields.io/badge/Kubernetes-Ready-326CE5?logo=kubernetes)
-![Tests](https://img.shields.io/badge/Tests-253_Passing-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-273_Passing-brightgreen)
 
 ---
 
@@ -26,10 +26,11 @@
 | **Reliability** | Fails if Claude API down | **Works offline** (rules layer) |
 | **Observability** | Basic logging | **Full telemetry** (rca_method tracking) |
 | **Multi-Agent** | In-memory state | **Redis-backed** (distributed safe) |
-| **Tests** | 81 tests | **253 tests** (100% passing) |
+| **Tests** | 81 tests | **273 tests** (100% passing) |
 | **Verification** | None | **Auto-rollback** if metrics don't improve |
 | **Incident Storage** | None | **Postgres + Redis** (queryable analytics) |
 | **Trust Metrics** | None | **Override tracking** (human feedback loop) |
+| **RAG Investigation** | None | **Similarity search** (learn from past incidents) |
 
 ---
 
@@ -50,10 +51,11 @@
 │                     │ No high-confidence match?                           │
 │                     ↓                                                     │
 │  ┌──────────────────────────────────────────────────────────┐             │
-│  │ Layer 2: LLM ANALYSIS (2-5s, 40% of incidents)          │             │
+│  │ Layer 2: RAG-AUGMENTED LLM (2-5s, 40% of incidents)     │             │
+│  │ • pgvector similarity search (retrieve 5 similar cases) │             │
+│  │ • Multi-step investigation graph (LangGraph)            │             │
 │  │ • Claude Sonnet 4.5 for ambiguous cases                 │             │
-│  │ • Structured JSON output                                │             │
-│  │ • Root cause + recommended action                       │             │
+│  │ • Structured JSON output with citations                 │             │
 │  └──────────────────┬───────────────────────────────────────┘             │
 │                     ↓                                                     │
 │  ┌──────────────────────────────────────────────────────────┐             │
@@ -206,16 +208,21 @@ aether-guard/
 │       │
 │       │ ── Priority 2: Trust Metrics & Analytics ──────────
 │       ├── incident_report.py   # 📊 Structured incident reports (5 outcome categories)
-│       ├── incident_storage.py  # 💾 Postgres + Redis persistence layer
+│       ├── incident_storage.py  # 💾 Postgres + Redis persistence + pgvector
 │       ├── metrics.py           # 📉 Prometheus exporter (trust metrics)
 │       │
-│       └── tests/               # 🧪 253 pytest unit tests (100% passing)
+│       │ ── Priority 8: RAG-Augmented Investigation ────────
+│       ├── embedding.py         # 🧠 Voyage AI embedding generation
+│       ├── investigation_graph.py # 🔄 Multi-step RAG graph (LangGraph)
+│       │
+│       └── tests/               # 🧪 273 pytest unit tests (100% passing)
 │           ├── test_policy.py           # 41 tests (policy matrix, time gates)
 │           ├── test_verification.py     # 29 tests (metric validation, rollback)
 │           ├── test_rules.py            # 40 tests (all 7 rule patterns)
 │           ├── test_incident_report.py  # 23 tests (Priority 2: outcome taxonomy)
 │           ├── test_override.py         # 35 tests (Priority 2: human overrides)
 │           ├── test_goroutine_leak.py   # 46 tests (Priority 3: leak detection)
+│           ├── test_embedding.py        # 9 tests (Priority 8: RAG + pgvector)
 │           ├── test_remediation.py      # 32 tests (cooldown, Redis fallback)
 │           └── test_webhook.py          # 7 tests (listener integration)
 │
@@ -251,6 +258,7 @@ aether-guard/
 │   ├── load_gen.py              # Traffic generator with chaos scenarios
 │   ├── generate_postmortem.py  # Standalone post-mortem CLI
 │   ├── trigger_incidents.sh     # Test incident generator (OOM, 503, goroutine leak, etc.)
+│   ├── backfill_embeddings.py   # Priority 8: Generate embeddings for existing incidents
 │   └── deploy.sh                # Production deployment script
 ├── postmortems/                 # Auto-generated blameless post-mortems
 ├── .github/workflows/
@@ -440,7 +448,17 @@ validate-infra-config ─────┘
 Copy `.env.example` to `.env` and fill in:
 
 ```bash
+# Required
 ANTHROPIC_API_KEY=sk-ant-...        # Required — Claude API key
+
+# Optional: Priority 8 RAG-Augmented Investigation
+VOYAGE_API_KEY=pa-...               # Optional — Voyage AI for embeddings (enables RAG)
+RAG_ENABLED=true                    # Enable multi-step investigation graph
+RAG_MAX_ITERATIONS=2                # Hard iteration cap (prevents unbounded loops)
+RAG_CONFIDENCE_THRESHOLD=0.75       # Min confidence to finalize without refinement
+SIMILARITY_MIN_CONFIDENCE=0.7       # Min confidence for similarity search retrieval
+
+# Other optional overrides
 CLAUDE_MODEL=claude-sonnet-4-5-20250929
 CONFIDENCE_THRESHOLD=0.75           # Min confidence to execute an action
 DRY_RUN=false                       # Set true to skip Docker remediation calls
@@ -468,13 +486,13 @@ Plus:
 
 ## Testing
 
-**253 tests** across Go and Python, all running in CI and **100% passing**.
+**273 tests** across Go and Python, all running in CI and **100% passing**.
 
 ```bash
 # Go — 23 tests (chaos, handlers, metrics)
 cd services/target-service && go test -race ./...
 
-# Python agent — 253 tests total
+# Python agent — 273 tests total
 python3 -m pytest services/agent/tests/ -v
 
 # Breakdown by priority:
@@ -490,9 +508,13 @@ python3 -m pytest services/agent/tests/ -v
 #   Priority 3 — Goroutine Detection (46 tests):
 #     test_goroutine_leak.py:   46 tests  (trend analysis, false positive guards)
 #
-#   Infrastructure (39 tests):
+#   Priority 8 — RAG Investigation (9 tests):
+#     test_embedding.py:         9 tests  (Voyage AI, pgvector, similarity search)
+#
+#   Infrastructure (50 tests):
 #     test_remediation.py:      32 tests  (cooldown, Redis fallback, in-memory mode)
 #     test_webhook.py:           7 tests  (listener webhook integration)
+#     test_investigation_graph.py: 11 tests  (LangGraph RAG flow, iteration cap)
 
 # Python listener — 14 tests (webhook, enrichment, queue)
 python3 -m pytest services/listener/tests/ --import-mode=importlib -v
@@ -637,6 +659,17 @@ Each runbook: thresholds → mitigation commands → PromQL investigation → es
 - [x] Log warning detection (goroutine/deadlock keywords)
 - [x] Traffic spike exclusion
 - [x] 46 comprehensive tests (true positives, false positive guards, edge cases)
+
+### ✅ Completed (Priority 8: RAG-Augmented Investigation)
+- [x] pgvector extension with HNSW indexing on Postgres
+- [x] Voyage AI embedding generation (voyage-3, 1024-dim)
+- [x] Similarity search (top-5 retrieval with min confidence filter)
+- [x] Multi-step investigation graph (LangGraph with hard iteration cap)
+- [x] Override field surfacing (trust metrics integration)
+- [x] Per-source graceful degradation (logs, metrics, embeddings)
+- [x] Cost/latency analysis (measured facts vs speculation)
+- [x] Backfill script for existing incidents
+- [x] 9 comprehensive tests (embedding, similarity, RAG flow)
 
 ### 🚧 In Progress
 - [ ] Slack integration for approval workflow (currently 5s demo delay)

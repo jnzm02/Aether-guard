@@ -187,12 +187,16 @@ services:
     ports:
       - "8082:8082"
     env_file:
-      - ../.env        # loads ANTHROPIC_API_KEY + optional overrides
+      - ../.env        # loads ANTHROPIC_API_KEY, VOYAGE_API_KEY + optional overrides
     environment:
       - LISTENER_URL=http://listener:8081
       - ANALYSIS_LOG_PATH=/app/data/analyses.jsonl
       - REDIS_URL=redis://redis:6379/0
       - POSTGRES_URL=postgresql://aether_guard:local_dev_password@postgres:5432/aether_guard
+      - SIMILARITY_MIN_CONFIDENCE=0.7  # Priority 8: Min confidence for RAG similarity search
+      - RAG_ENABLED=true               # Priority 8: Enable RAG investigation graph
+      - RAG_MAX_ITERATIONS=2           # Priority 8: Max refine cycles (hard iteration cap)
+      - RAG_CONFIDENCE_THRESHOLD=0.75  # Priority 8: Min confidence to finalize without refinement
     volumes:
       - agent_data:/app/data
     restart: unless-stopped
