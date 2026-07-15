@@ -608,7 +608,7 @@ curl -fsSL https://raw.githubusercontent.com/jnzm02/Aether-guard/main/scripts/se
 - Backup & restore capabilities
 - Telegram notifications (deployment status, health checks)
 
-See [CD Setup Guide](docs/CD-SETUP-GUIDE.md) for detailed instructions.
+See [Deployment Guide](docs/DEPLOYMENT.md) for detailed instructions.
 
 ---
 
