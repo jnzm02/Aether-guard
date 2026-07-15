@@ -44,10 +44,13 @@ from policy import RootCauseCategory
 
 log = logging.getLogger(__name__)
 
-# ── Configuration (Goroutine Leak Pattern) ────────────────────────────────────
-# These thresholds are tunable via environment variables for production tuning
-# based on Priority 2 trust metrics (override rates).
+# ── Configuration ──────────────────────────────────────────────────────────────
 
+# Job name in Prometheus scrape config (must match job label in your Prometheus config)
+MONITORED_JOB = os.getenv("MONITORED_JOB", "target-service")
+
+# Goroutine Leak Pattern thresholds (tunable via environment variables for production
+# tuning based on Priority 2 trust metrics - override rates)
 GOROUTINE_LEAK_SLOPE_THRESHOLD = float(
     os.getenv("GOROUTINE_LEAK_SLOPE_THRESHOLD", "0.0833")  # 5 goroutines/min = 0.0833/sec
 )
@@ -283,7 +286,7 @@ class RuleEngine:
         classifier = TrendClassifier()
         try:
             trend = await classifier.analyze_metric(
-                metric_expr='go_memstats_heap_alloc_bytes{job="target-service"}',
+                metric_expr=f'go_memstats_heap_alloc_bytes{{job="{MONITORED_JOB}"}}',
                 slope_threshold=HEAP_LEAK_SLOPE_THRESHOLD,
                 window_minutes=10,
                 step_seconds=30,
@@ -417,7 +420,7 @@ class RuleEngine:
                 try:
                     # Use CPU user time as the metric (more precise than cpu_usage_percent)
                     cpu_trend = await classifier.analyze_metric(
-                        metric_expr='rate(process_cpu_seconds_total{job="target-service"}[5m])',
+                        metric_expr=f'rate(process_cpu_seconds_total{{job="{MONITORED_JOB}"}}[5m])',
                         slope_threshold=0.01,  # 1% increase per second = runaway
                         window_minutes=10,
                         step_seconds=30,
@@ -676,7 +679,7 @@ class RuleEngine:
         classifier = TrendClassifier()
         try:
             trend = await classifier.analyze_metric(
-                metric_expr='go_goroutines{job="target-service"}',
+                metric_expr=f'go_goroutines{{job="{MONITORED_JOB}"}}',
                 slope_threshold=GOROUTINE_LEAK_SLOPE_THRESHOLD,
                 window_minutes=10,
                 step_seconds=30,
@@ -727,7 +730,7 @@ class RuleEngine:
         # Confidence booster 1: Heap memory also rising (goroutine leak often causes memory leak)
         try:
             heap_trend = await classifier.analyze_metric(
-                metric_expr='go_memstats_heap_inuse_bytes{job="target-service"}',
+                metric_expr=f'go_memstats_heap_inuse_bytes{{job="{MONITORED_JOB}"}}',
                 slope_threshold=HEAP_LEAK_SLOPE_THRESHOLD,
                 window_minutes=10,
                 step_seconds=30,

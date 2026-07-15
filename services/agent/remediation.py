@@ -29,7 +29,10 @@ log = logging.getLogger("aether-guard.remediation")
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 TARGET_CONTAINER  = os.getenv("TARGET_CONTAINER",   "target-service")
-ROLLBACK_IMAGE    = os.getenv("ROLLBACK_IMAGE",      "aether-guard/target-service:previous")
+# ROLLBACK_IMAGE: Override this to match your Docker image naming convention
+# Default uses TARGET_CONTAINER to build image name dynamically
+_default_rollback_image = f"aether-guard/{TARGET_CONTAINER}:previous"
+ROLLBACK_IMAGE    = os.getenv("ROLLBACK_IMAGE", _default_rollback_image)
 DRY_RUN           = os.getenv("DRY_RUN", "false").lower() == "true"
 
 # Per-action minimum confidence required before execution.

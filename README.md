@@ -485,7 +485,43 @@ CONFIDENCE_THRESHOLD=0.75           # Min confidence to execute an action
 DRY_RUN=false                       # Set true to skip Docker remediation calls
 POLL_INTERVAL=10                    # Agent polling interval (seconds)
 REDIS_URL=redis://redis:6379/0      # Redis connection URL (V2)
+
+# Service Configuration — Monitor ANY Prometheus-instrumented service
+MONITORED_JOB=target-service        # Must match Prometheus job_name
+TARGET_CONTAINER=target-service     # Docker container name for logs/remediation
 ```
+
+### Using Aether-Guard with Your Own Service
+
+**Aether-Guard works with ANY Prometheus-instrumented service**, not just the bundled `target-service` demo.
+
+To monitor your own service:
+1. Instrument your service with Prometheus metrics (see metric contract below)
+2. Configure Prometheus to scrape your service with a unique `job_name`
+3. Set `MONITORED_JOB` and `TARGET_CONTAINER` environment variables
+
+**📖 Complete guide:** [docs/BRING_YOUR_OWN_SERVICE.md](docs/BRING_YOUR_OWN_SERVICE.md)
+
+**Metric Contract** (required for SLO alerting):
+```
+aether_guard_http_requests_total{status_code}      # Counter
+aether_guard_http_request_duration_seconds         # Histogram
+```
+
+Example: Monitor a service called "my-api-service":
+```bash
+# .env
+MONITORED_JOB=my-api-service
+TARGET_CONTAINER=my-api-service
+
+# infra/prometheus/prometheus.yml
+scrape_configs:
+  - job_name: "my-api-service"
+    static_configs:
+      - targets: ["my-api-service:8080"]
+```
+
+Prometheus alert rules are **auto-generated** from templates at container startup using `envsubst`.
 
 ### V2 Safety Gates (6 Layers)
 

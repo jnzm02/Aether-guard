@@ -34,6 +34,7 @@ log = logging.getLogger("aether-guard.agent.enrichment")
 
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://prometheus:9090")
 TARGET_CONTAINER = os.getenv("TARGET_CONTAINER", "target-service")
+MONITORED_JOB = os.getenv("MONITORED_JOB", "target-service")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Docker client (for log fetching)
@@ -82,15 +83,51 @@ _KEY_METRICS: list[tuple[str, str]] = [
         "chaos_errors_injected_total",
         "sum(aether_guard_chaos_errors_injected_total)",
     ),
-    (
-        "runtime_goroutines",
-        'go_goroutines{job="target-service"}',
-    ),
-    (
-        "runtime_heap_inuse_bytes",
-        'go_memstats_heap_inuse_bytes{job="target-service"}',
-    ),
 ]
+
+# Build runtime metrics with configurable job name
+def _build_key_metrics():
+    """Build metrics list with MONITORED_JOB substituted."""
+    base_metrics = [
+        (
+            "error_ratio_5m",
+            'sum(rate(aether_guard_http_requests_total{status_code=~"5.."}[5m]))'
+            " / sum(rate(aether_guard_http_requests_total[5m]))",
+        ),
+        (
+            "latency_p99_5m_seconds",
+            "histogram_quantile(0.99,"
+            " sum(rate(aether_guard_http_request_duration_seconds_bucket[5m])) by (le))",
+        ),
+        (
+            "latency_p50_5m_seconds",
+            "histogram_quantile(0.50,"
+            " sum(rate(aether_guard_http_request_duration_seconds_bucket[5m])) by (le))",
+        ),
+        (
+            "request_rate_5m_rps",
+            "sum(rate(aether_guard_http_requests_total[5m]))",
+        ),
+        (
+            "memleak_bytes_allocated",
+            "aether_guard_chaos_memleak_bytes_allocated",
+        ),
+        (
+            "chaos_errors_injected_total",
+            "sum(aether_guard_chaos_errors_injected_total)",
+        ),
+        (
+            "runtime_goroutines",
+            f'go_goroutines{{job="{MONITORED_JOB}"}}',
+        ),
+        (
+            "runtime_heap_inuse_bytes",
+            f'go_memstats_heap_inuse_bytes{{job="{MONITORED_JOB}"}}',
+        ),
+    ]
+    return base_metrics
+
+_KEY_METRICS = _build_key_metrics()
 
 
 async def fetch_prometheus_snapshot() -> dict[str, Any]:

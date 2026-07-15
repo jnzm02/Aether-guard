@@ -9,6 +9,7 @@ This is CRITICAL for production safety — never trust that an action worked.
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
@@ -16,6 +17,9 @@ from typing import Optional
 import httpx
 
 log = logging.getLogger(__name__)
+
+# Configuration
+TARGET_CONTAINER = os.getenv("TARGET_CONTAINER", "target-service")
 
 
 @dataclass
@@ -105,8 +109,8 @@ class VerificationEngine:
             "latency_p99_5m": "histogram_quantile(0.99, rate(aether_guard_request_duration_seconds_bucket[5m]))",
             "latency_p50_5m": "histogram_quantile(0.50, rate(aether_guard_request_duration_seconds_bucket[5m]))",
             "request_rate_5m": "rate(aether_guard_http_requests_total[5m])",
-            "memory_usage_bytes": "container_memory_usage_bytes{name='target-service'}",
-            "cpu_usage_percent": "rate(container_cpu_usage_seconds_total{name='target-service'}[5m]) * 100",
+            "memory_usage_bytes": f"container_memory_usage_bytes{{name='{TARGET_CONTAINER}'}}",
+            "cpu_usage_percent": f"rate(container_cpu_usage_seconds_total{{name='{TARGET_CONTAINER}'}}[5m]) * 100",
         }
 
         values = {}
