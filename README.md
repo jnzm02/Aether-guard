@@ -10,7 +10,7 @@
 ![Claude](https://img.shields.io/badge/Claude-Sonnet_4.5-8A2BE2)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker)
 ![Kubernetes](https://img.shields.io/badge/Kubernetes-Ready-326CE5?logo=kubernetes)
-![Tests](https://img.shields.io/badge/Tests-273_Passing-brightgreen)
+![Tests](https://img.shields.io/badge/Tests-280_Passing-brightgreen)
 
 ---
 
@@ -26,7 +26,7 @@
 | **Reliability** | Fails if Claude API down | **Works offline** (rules layer) |
 | **Observability** | Basic logging | **Full telemetry** (rca_method tracking) |
 | **Multi-Agent** | In-memory state | **Redis-backed** (distributed safe) |
-| **Tests** | 81 tests | **273 tests** (100% passing) |
+| **Tests** | 81 tests | **280 tests** (100% passing) |
 | **Verification** | None | **Auto-rollback** if metrics don't improve |
 | **Incident Storage** | None | **Postgres + Redis** (queryable analytics) |
 | **Trust Metrics** | None | **Override tracking** (human feedback loop) |
@@ -230,16 +230,22 @@ aether-guard/
 │       ├── embedding.py         # 🧠 Voyage AI embedding generation
 │       ├── investigation_graph.py # 🔄 Multi-step RAG graph (LangGraph)
 │       │
-│       └── tests/               # 🧪 273 pytest unit tests (100% passing)
-│           ├── test_policy.py           # 41 tests (policy matrix, time gates)
-│           ├── test_verification.py     # 29 tests (metric validation, rollback)
-│           ├── test_rules.py            # 40 tests (all 7 rule patterns)
-│           ├── test_incident_report.py  # 23 tests (Priority 2: outcome taxonomy)
-│           ├── test_override.py         # 35 tests (Priority 2: human overrides)
-│           ├── test_goroutine_leak.py   # 46 tests (Priority 3: leak detection)
+│       └── tests/               # 🧪 239 pytest unit tests (100% passing)
+│           ├── test_postmortem.py       # 45 tests (post-mortem generation)
+│           ├── test_policy.py           # 36 tests (policy matrix, time gates)
+│           ├── test_rules.py            # 33 tests (all 7 rule patterns)
+│           ├── test_verification.py     # 23 tests (metric validation, rollback)
+│           ├── test_parse_validate.py   # 21 tests (alert parsing, validation)
+│           ├── test_remediation.py      # 13 tests (cooldown, Redis fallback)
+│           ├── test_incident_report.py  # 11 tests (Priority 2: outcome taxonomy)
+│           ├── test_trend_based_patterns.py # 11 tests (trend analysis)
+│           ├── test_webhook.py          # 10 tests (listener integration)
+│           ├── test_goroutine_leak.py   # 9 tests (Priority 3: leak detection)
 │           ├── test_embedding.py        # 9 tests (Priority 8: RAG + pgvector)
-│           ├── test_remediation.py      # 32 tests (cooldown, Redis fallback)
-│           └── test_webhook.py          # 7 tests (listener integration)
+│           ├── test_override.py         # 8 tests (Priority 2: human overrides)
+│           ├── test_tracing.py          # 7 tests (OpenTelemetry tracing)
+│           ├── test_benchmark_tracing.py # 2 tests (tracing benchmarks)
+│           └── test_benchmark_real_tempo.py # 1 test (Tempo integration)
 │
 ├── infra/
 │   ├── docker-compose.yml       # Full 7-service stack (+ Redis)
@@ -445,7 +451,7 @@ validate-infra-config ─────┘
 |-----|----------------|--------|
 | `go-build` | `go build` + `go vet` + `go test -race` (23 tests) | ✅ Passing |
 | `python-lint` | `ruff` linting on agent, listener, scripts | ✅ Passing |
-| `python-test` | `pytest` — **110 tests** (41 policy + 29 verification + 40 rules) | ✅ Passing |
+| `python-test` | `pytest` — **239 tests** (36 policy + 23 verification + 33 rules + more) | ✅ Passing |
 | `validate-infra-config` | `promtool check config/rules` + `amtool check-config` | ✅ Passing |
 | `docker-build` | Builds all 3 Docker images (only runs if all 4 above pass) | ✅ Passing |
 | `integration-smoke` | Starts full stack, hits all health endpoints, queries Prometheus | ✅ Passing |
@@ -501,35 +507,32 @@ Plus:
 
 ## Testing
 
-**273 tests** across Go and Python, all running in CI and **100% passing**.
+**280 tests** across Go and Python, all running in CI and **100% passing**.
 
 ```bash
-# Go — 23 tests (chaos, handlers, metrics)
+# Go — 27 tests (target-service: 14 tests, event-tracker: 3 tests, listener benchmarks: 10 tests)
 cd services/target-service && go test -race ./...
+cd services/event-tracker && go test -race ./...
 
-# Python agent — 273 tests total
+# Python agent — 239 tests total
 python3 -m pytest services/agent/tests/ -v
 
-# Breakdown by priority:
-#   V2 Core (110 tests):
-#     test_policy.py:        41 tests  (policy matrix, time gates, approval logic)
-#     test_verification.py:  29 tests  (metric validation, rollback decisions)
-#     test_rules.py:         40 tests  (all 7 rule patterns, confidence scoring)
-#
-#   Priority 2 — Trust Metrics (58 tests):
-#     test_incident_report.py:  23 tests  (outcome taxonomy, duration calculation)
-#     test_override.py:         35 tests  (human override tracking, trust metrics)
-#
-#   Priority 3 — Goroutine Detection (46 tests):
-#     test_goroutine_leak.py:   46 tests  (trend analysis, false positive guards)
-#
-#   Priority 8 — RAG Investigation (9 tests):
-#     test_embedding.py:         9 tests  (Voyage AI, pgvector, similarity search)
-#
-#   Infrastructure (50 tests):
-#     test_remediation.py:      32 tests  (cooldown, Redis fallback, in-memory mode)
-#     test_webhook.py:           7 tests  (listener webhook integration)
-#     test_investigation_graph.py: 11 tests  (LangGraph RAG flow, iteration cap)
+# Breakdown by file:
+#   test_postmortem.py:            45 tests  (post-mortem generation)
+#   test_policy.py:                36 tests  (policy matrix, time gates, approval logic)
+#   test_rules.py:                 33 tests  (all 7 rule patterns, confidence scoring)
+#   test_verification.py:          23 tests  (metric validation, rollback decisions)
+#   test_parse_validate.py:        21 tests  (alert parsing, validation)
+#   test_remediation.py:           13 tests  (cooldown, Redis fallback, in-memory mode)
+#   test_incident_report.py:       11 tests  (outcome taxonomy, duration calculation)
+#   test_trend_based_patterns.py:  11 tests  (trend analysis patterns)
+#   test_webhook.py:               10 tests  (listener integration)
+#   test_goroutine_leak.py:         9 tests  (goroutine leak detection)
+#   test_embedding.py:              9 tests  (Voyage AI, pgvector, similarity search)
+#   test_override.py:               8 tests  (human override tracking, trust metrics)
+#   test_tracing.py:                7 tests  (OpenTelemetry tracing)
+#   test_benchmark_tracing.py:      2 tests  (tracing benchmarks)
+#   test_benchmark_real_tempo.py:   1 test   (Tempo integration)
 
 # Python listener — 14 tests (webhook, enrichment, queue)
 python3 -m pytest services/listener/tests/ --import-mode=importlib -v
@@ -555,7 +558,7 @@ Automated CD pipeline via GitHub Actions for deploying to any VPS:
 
 ```bash
 # 1. Run server setup script
-curl -fsSL https://raw.githubusercontent.com/YOUR_USERNAME/Aether-guard/main/scripts/setup-server.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/jnzm02/Aether-guard/main/scripts/setup-server.sh | sudo bash
 
 # 2. Configure GitHub Secrets (see docs/CD-SETUP-GUIDE.md)
 # 3. Trigger deployment via GitHub Actions UI
@@ -654,7 +657,7 @@ Each runbook: thresholds → mitigation commands → PromQL investigation → es
 - [x] Policy engine for action gating
 - [x] Verification engine with auto-rollback
 - [x] Redis for distributed state
-- [x] 253 comprehensive unit tests (100% passing)
+- [x] 280 comprehensive unit tests (100% passing)
 - [x] Incident replay framework
 - [x] CI/CD pipeline (all tests passing)
 
@@ -664,7 +667,7 @@ Each runbook: thresholds → mitigation commands → PromQL investigation → es
 - [x] Override tracking (manual reversal, manual escalation)
 - [x] Trust metrics API (by pattern, by outcome, override rates)
 - [x] Prometheus metrics export (incidents, overrides, outcomes)
-- [x] 58 comprehensive tests (incident reports + overrides)
+- [x] 19 comprehensive tests (incident reports + overrides)
 
 ### ✅ Completed (Priority 3: Goroutine Leak Detection)
 - [x] Time-series trend analysis (linear regression, R² confidence)
@@ -673,7 +676,7 @@ Each runbook: thresholds → mitigation commands → PromQL investigation → es
 - [x] Heap correlation analysis
 - [x] Log warning detection (goroutine/deadlock keywords)
 - [x] Traffic spike exclusion
-- [x] 46 comprehensive tests (true positives, false positive guards, edge cases)
+- [x] 9 comprehensive tests (goroutine leak detection pattern)
 
 ### ✅ Completed (Priority 8: RAG-Augmented Investigation)
 - [x] pgvector extension with HNSW indexing on Postgres
@@ -768,6 +771,6 @@ MIT — see [LICENSE](LICENSE) for details.
 
 ---
 
-**Built with ❤️ by the Aether-Guard team**
+**Built by Nizami Jussupov**
 
 For questions, issues, or feature requests: [GitHub Issues](https://github.com/jnzm02/Aether-guard/issues)
