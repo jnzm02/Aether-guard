@@ -218,6 +218,30 @@ services:
       com.aether-guard.component: "agent"
       com.aether-guard.phase: "3"
 
+  # ── Event Tracker (Priority 9: Real-Traffic Validation) ──────────────────
+  event-tracker:
+    build:
+      context: ../services/event-tracker
+      dockerfile: Dockerfile
+    image: aether-guard/event-tracker:latest
+    container_name: event-tracker
+    ports:
+      - "8083:8083"
+    environment:
+      - PORT=8083
+      - GITHUB_TOKEN=${GITHUB_TOKEN}  # Optional: raises rate limit 60→5000/hour
+    restart: unless-stopped
+    networks:
+      - aether-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8083/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    labels:
+      com.aether-guard.component: "event-tracker"
+      com.aether-guard.phase: "9-priority9"
+
   # ── Grafana Tempo (Distributed Tracing) ──────────────────────────────────
   tempo:
     image: grafana/tempo:2.3.1

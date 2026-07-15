@@ -31,6 +31,7 @@
 | **Incident Storage** | None | **Postgres + Redis** (queryable analytics) |
 | **Trust Metrics** | None | **Override tracking** (human feedback loop) |
 | **RAG Investigation** | None | **Similarity search** (learn from past incidents) |
+| **Validation Data** | Synthetic chaos only | **Real traffic** (GitHub Events API) |
 
 ---
 
@@ -106,49 +107,56 @@
 │  ┌──────────────────┐   scrape/5s   ┌──────────────────────────┐   │
 │  │  target-service  │◄──────────────│       Prometheus         │   │
 │  │  (Go, :8080)     │               │  (:9090)                 │   │
-│  │                  │               │  • SLO recording rules   │   │
-│  │  Chaos Endpoints:│               │  • Multi-burn-rate alerts│   │
-│  │  /chaos/memleak  │               └──────────┬───────────────┘   │
-│  │  /chaos/latency  │                          │ alert fired        │
-│  │  /chaos/error    │               ┌──────────▼───────────────┐   │
-│  │                  │               │      Alertmanager         │   │
-│  │  Golden Signals: │               │  (:9093)                 │   │
-│  │  • request_rate  │               │  • Routing + inhibitions │   │
-│  │  • error_ratio   │               └──────────┬───────────────┘   │
-│  │  • p99_latency   │                          │ POST /webhook      │
-│  │  • mem_leak_bytes│               ┌──────────▼───────────────┐   │
-│  └──────────────────┘               │        Listener           │   │
-│                                     │  (Python/FastAPI, :8081)  │   │
-│                                     │  • Enriches alert with:   │   │
-│  ┌──────────────────┐               │    - Prometheus metrics   │   │
-│  │      Redis       │               │    - Docker container logs│   │
-│  │  (:6379)         │               └──────────┬───────────────┘   │
-│  │  • Cooldown state│                          │ poll every 10s    │
-│  │  • Approval queue│               ┌──────────▼───────────────┐   │
-│  └────────┬─────────┘               │   AI SRE Agent (V2)       │   │
-│           │                         │  (Python/FastAPI, :8082)  │   │
-│           │                         │                           │   │
-│           └────────────────────────►│  ┌─────────────────────┐  │   │
-│                                     │  │ Rule Engine         │  │   │
-│                                     │  │ (7 patterns)        │  │   │
-│                                     │  └──────┬──────────────┘  │   │
-│                                     │         ↓ fallback        │   │
-│                                     │  ┌─────────────────────┐  │   │
-│                                     │  │ Claude AI           │  │   │
-│                                     │  │ (Sonnet 4.5)        │  │   │
-│                                     │  └──────┬──────────────┘  │   │
-│                                     │         ↓                 │   │
-│                                     │  ┌─────────────────────┐  │   │
-│                                     │  │ Policy Engine       │  │   │
-│                                     │  └──────┬──────────────┘  │   │
-│                                     │         ↓                 │   │
-│                                     │  ┌─────────────────────┐  │   │
-│                                     │  │ Verification Engine │  │   │
-│                                     │  │ + Auto-Rollback     │  │   │
-│                                     │  └──────┬──────────────┘  │   │
-│                                     │         ↓                 │   │
-│                                     │  Post-Mortem Generator ──►│──►│── postmortems/*.md
-│                                     └───────────────────────────┘   │
+│  │                  │  scrape/15s   │  • SLO recording rules   │   │
+│  │  Chaos Endpoints:│   ┌───────────│  • Multi-burn-rate alerts│   │
+│  │  /chaos/memleak  │   │           └──────────┬───────────────┘   │
+│  │  /chaos/latency  │   │                      │ alert fired        │
+│  │  /chaos/error    │   │           ┌──────────▼───────────────┐   │
+│  │                  │   │           │      Alertmanager         │   │
+│  │  Golden Signals: │   │           │  (:9093)                 │   │
+│  │  • request_rate  │   │           │  • Routing + inhibitions │   │
+│  │  • error_ratio   │   │           └──────────┬───────────────┘   │
+│  │  • p99_latency   │   │                      │ POST /webhook      │
+│  │  • mem_leak_bytes│   │           ┌──────────▼───────────────┐   │
+│  └──────────────────┘   │           │        Listener           │   │
+│                         │           │  (Python/FastAPI, :8081)  │   │
+│  ┌──────────────────┐   │           │  • Enriches alert with:   │   │
+│  │  event-tracker   │◄──┘           │    - Prometheus metrics   │   │
+│  │  (Go, :8083)     │               │    - Docker container logs│   │
+│  │                  │               └──────────┬───────────────┘   │
+│  │  Real Traffic:   │   ┌──────────────────────────────────────┐   │
+│  │  • GitHub Events │   │           Redis                      │   │
+│  │  • 2min polling  │   │  (:6379)                             │   │
+│  └──────────────────┘   │  • Cooldown state                    │   │
+│                         │  • Approval queue                    │   │
+│                         └────────────┬─────────────────────────┘   │
+│                                      │                             │
+│                                      ▼                             │
+│                         ┌──────────────────────────────────────┐   │
+│                         │   AI SRE Agent (V2)                   │   │
+│                         │  (Python/FastAPI, :8082)              │   │
+│                         │                                       │   │
+│                         │  ┌─────────────────────┐              │   │
+│                         │  │ Rule Engine         │              │   │
+│                         │  │ (7 patterns)        │              │   │
+│                         │  └──────┬──────────────┘              │   │
+│                         │         ↓ fallback                    │   │
+│                         │  ┌─────────────────────┐              │   │
+│                         │  │ Claude AI           │              │   │
+│                         │  │ (Sonnet 4.5)        │              │   │
+│                         │  └──────┬──────────────┘              │   │
+│                         │         ↓                             │   │
+│                         │  ┌─────────────────────┐              │   │
+│                         │  │ Policy Engine       │              │   │
+│                         │  └──────┬──────────────┘              │   │
+│                         │         ↓                             │   │
+│                         │  ┌─────────────────────┐              │   │
+│                         │  │ Verification Engine │              │   │
+│                         │  │ + Auto-Rollback     │              │   │
+│                         │  └──────┬──────────────┘              │   │
+│                         │         ↓                             │   │
+│                         │  Post-Mortem Generator ───────────────┼──►│── postmortems/*.md
+│                         └───────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -192,6 +200,13 @@ aether-guard/
 │   │   ├── listener.py          # FastAPI webhook + Prometheus + Docker log fetch
 │   │   ├── alert_summary.py    # Daily Telegram summaries
 │   │   └── tests/               # 14 pytest unit tests
+│   ├── event-tracker/          # Priority 9: Real-traffic validation (Go)
+│   │   ├── cmd/server/main.go  # HTTP server + background poller
+│   │   ├── internal/
+│   │   │   ├── github/         # GitHub Events API client + cache
+│   │   │   ├── handlers/       # JSON API + health + HTML page
+│   │   │   └── metrics/        # Prometheus instruments (GitHub API monitoring)
+│   │   └── Dockerfile
 │   └── agent/                   # Python AI SRE agent (V2)
 │       ├── agent.py             # Hybrid RCA pipeline + FastAPI endpoints
 │       ├── prompt.py            # Claude system prompt + context builder
@@ -670,6 +685,17 @@ Each runbook: thresholds → mitigation commands → PromQL investigation → es
 - [x] Cost/latency analysis (measured facts vs speculation)
 - [x] Backfill script for existing incidents
 - [x] 9 comprehensive tests (embedding, similarity, RAG flow)
+
+### ✅ Completed (Priority 9: Real-Traffic Validation Service)
+- [x] GitHub Events API integration (public events feed)
+- [x] Background poller with rate limit tracking (2-minute interval)
+- [x] In-memory cache with staleness handling
+- [x] Prometheus metrics matching target-service pattern
+- [x] HTTP endpoints: JSON API, health, metrics, HTML page
+- [x] Structured logging for enrichment.py compatibility
+- [x] Resilience: serves stale cache with staleness indicator on API failure
+- [x] Docker integration + Prometheus scrape configuration
+- [x] 3 Go tests (cache, client, resilience)
 
 ### 🚧 In Progress
 - [ ] Slack integration for approval workflow (currently 5s demo delay)

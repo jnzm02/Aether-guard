@@ -45,3 +45,13 @@ scrape_configs:
         labels:
           service: "target-service"
           team:    "platform"
+
+  # Priority 9: Event Tracker (GitHub Events API - real external dependency).
+  - job_name: "event-tracker"
+    metrics_path: "/metrics"
+    scrape_interval: 15s
+    static_configs:
+      - targets: ["event-tracker:8083"]
+        labels:
+          service: "event-tracker"
+          team:    "platform"
