@@ -1,0 +1,4 @@
+[tool.mutmut]
+source_paths = ["incident_report.py"]
+test_command = "python3 -m pytest -x tests/test_incident_report.py"
+pytest_add_cli_args = ["--import-mode=importlib", "--ignore=tests/test_benchmark_real_tempo.py", "--ignore=tests/test_benchmark_tracing.py", "--ignore=tests/test_rules.py", "--ignore=tests/test_trend_based_patterns.py", "--ignore=tests/test_goroutine_leak.py"]

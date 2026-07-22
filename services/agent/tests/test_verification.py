@@ -602,3 +602,71 @@ def test_latency_improvement_thresholds(before, after, expected_improved):
     )
     result = engine._verify_latency_improvement(before_snapshot, after_snapshot)
     assert result.improved == expected_improved
+
+
+# ── Edge Case Regression Tests ────────────────────────────────────────────────
+
+class TestEdgeCaseRegressions:
+    """Regression tests for edge cases found by coverage analysis."""
+
+    def test_error_rate_regression_from_zero(self, engine):
+        """
+        Regression test for verification.py:196-197 (before.error_rate_5m == 0 edge case).
+
+        Scenario: Error rate was 0% before remediation, but INCREASED after.
+        Expected: Should be marked as NOT improved (regression).
+        """
+        before = MetricsSnapshot(
+            timestamp=datetime.now(),
+            error_rate_5m=0.0,  # Zero errors before
+            latency_p99_5m=0.5,
+            latency_p50_5m=0.2,
+            request_rate_5m=100.0,
+            memory_usage_bytes=None,
+            cpu_usage_percent=None,
+        )
+        after = MetricsSnapshot(
+            timestamp=datetime.now(),
+            error_rate_5m=0.02,  # 2% errors after (regression!)
+            latency_p99_5m=0.5,
+            latency_p50_5m=0.2,
+            request_rate_5m=100.0,
+            memory_usage_bytes=None,
+            cpu_usage_percent=None,
+        )
+        result = engine._verify_error_rate_improvement(before, after)
+
+        # Should NOT be marked as improved (regression detected)
+        assert result.success is False
+        assert "increased" in result.reason.lower()
+
+    def test_latency_improvement_from_zero_baseline(self, engine):
+        """
+        Regression test for verification.py:248-249 (before.latency_p99_5m == 0 edge case).
+
+        Scenario: Latency was 0 before (edge case), check against SLO threshold.
+        Expected: Success if after latency <= SLO threshold.
+        """
+        before = MetricsSnapshot(
+            timestamp=datetime.now(),
+            error_rate_5m=0.001,
+            latency_p99_5m=0.0,  # Zero latency before (unusual but possible)
+            latency_p50_5m=0.0,
+            request_rate_5m=100.0,
+            memory_usage_bytes=None,
+            cpu_usage_percent=None,
+        )
+        after = MetricsSnapshot(
+            timestamp=datetime.now(),
+            error_rate_5m=0.001,
+            latency_p99_5m=0.3,  # 300ms - within 500ms SLO
+            latency_p50_5m=0.15,
+            request_rate_5m=100.0,
+            memory_usage_bytes=None,
+            cpu_usage_percent=None,
+        )
+        result = engine._verify_latency_improvement(before, after)
+
+        # Should be successful (within SLO threshold)
+        assert result.success is True
+        assert "0.3" in result.reason or "300" in result.reason

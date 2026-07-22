@@ -172,6 +172,63 @@ class TestCooldownGate:
         )
         assert "Cooldown" in result.reason
 
+    def test_redis_cooldown_active_blocks_action(self):
+        """
+        Regression test for remediation.py:121-127 (cooldown ACTIVE path, ttl > 0).
+
+        Scenario: Redis client exists and key exists with positive TTL (cooldown active).
+        Expected: Action should be BLOCKED, elapsed time calculated from TTL.
+
+        This tests the case where Redis IS authoritative (cooldown active in Redis).
+        """
+        from unittest.mock import MagicMock
+
+        container = remediation.TARGET_CONTAINER
+
+        # Create mock Redis client that returns TTL > 0 (cooldown active)
+        mock_redis = MagicMock()
+        mock_redis.ttl.return_value = 150  # 150 seconds remaining in cooldown
+        remediation._redis_client = mock_redis
+
+        # Execute action - should be blocked by Redis cooldown
+        result = execute_action("RESTART", make_analysis("RESTART", 0.95))
+        assert result.outcome == "skipped", (
+            f"Expected Redis cooldown to block action (ttl=150 > 0), "
+            f"but got outcome={result.outcome!r}"
+        )
+        assert "Cooldown" in result.reason
+        # Verify that Redis ttl() was actually called
+        mock_redis.ttl.assert_called_once_with(f"cooldown:{container}")
+
+    def test_redis_connection_failure_falls_back_gracefully(self):
+        """
+        Regression test for remediation.py:126-127 (Redis exception path).
+
+        Scenario: Redis client exists but Redis query raises exception.
+        Expected: System should FAIL OPEN — fall back to in-memory dict.
+
+        This tests the behavior: Redis errors do NOT block execution entirely,
+        but degrade gracefully to in-memory state.
+        """
+        from unittest.mock import MagicMock
+
+        # Create mock Redis client that raises exception on ttl()
+        mock_redis = MagicMock()
+        mock_redis.ttl.side_effect = Exception("Redis connection timeout")
+        remediation._redis_client = mock_redis
+
+        # Clear in-memory state (no cooldown active in fallback)
+        remediation._last_action_ts.clear()
+
+        # Execute action - should succeed via in-memory fallback (no cooldown)
+        result = execute_action("RESTART", make_analysis("RESTART", 0.95))
+        # Actual behavior: should NOT be skipped (falls back to in-memory dict which is empty)
+        # If in-memory also had a cooldown, it would be blocked
+        assert result.outcome in ("dry_run", "failed"), (
+            f"Expected fallback to proceed (Redis failed, in-memory clear), "
+            f"but got outcome={result.outcome!r}"
+        )
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Gate 3 — dry-run
