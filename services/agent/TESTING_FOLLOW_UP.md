@@ -66,20 +66,33 @@ def test_restart_calls_docker_api_correctly(mock_client):
 
 **Estimated effort:** 3-4 tests per action type × 3 actions = ~10 tests, ~2 hours
 
-### Module-Level Import Failures (remediation.py:59-61, 71-72)
+### Module-Level Import-Time Paths (remediation.py:59-61, 71-72)
 
 **Currently untested:**
-- Redis connection failure during module import (lines 59-61)
-- Docker connection failure during module import (lines 71-72)
+- **Lines 59-61:** Redis import-time connection FAILURE handler (exception path)
+  ```python
+  except Exception as _redis_exc:  # line 59
+      _redis_client = None           # line 60
+      log.warning(...)               # line 61
+  ```
+  In test environment, Redis connects successfully, so this exception handler never executes.
 
-**Recommendation:**
-These are import-time side effects that set module globals (_redis_client, _client).
-Testing requires:
-1. Mocking redis/docker libraries before import
-2. Re-importing the module in isolated test
-3. Verifying fallback behavior (_redis_client = None, etc.)
+- **Lines 71-72:** Docker import-time connection SUCCESS path (try block)
+  ```python
+  _client.ping()                     # line 71
+  log.info("Docker socket connected") # line 72
+  ```
+  In test environment, Docker is unavailable, so these lines never execute (jumps to except block at line 73).
 
-**Approach:**
+**Why Deferral is Reasonable:**
+These are module-level import-time code paths requiring:
+1. Mocking redis/docker libraries BEFORE the module is imported
+2. Using `importlib.reload()` to re-import the module with mocked dependencies
+3. Verifying module globals (_redis_client, _client) are set correctly
+
+Unlike runtime exceptions (which were tested), import-time failures surface immediately at agent startup, making them lower risk (visible in logs, health checks fail, deployment blocked).
+
+**Approach (if pursued):**
 ```python
 def test_redis_import_failure_falls_back_to_none():
     with patch('redis.from_url', side_effect=Exception("Redis unavailable")):
@@ -87,9 +100,18 @@ def test_redis_import_failure_falls_back_to_none():
         import remediation as remediation_module
         importlib.reload(remediation_module)
         assert remediation_module._redis_client is None
+
+def test_docker_import_success_sets_client():
+    with patch('docker.from_env') as mock_docker:
+        mock_client = MagicMock()
+        mock_docker.return_value = mock_client
+        import importlib
+        import remediation as remediation_module
+        importlib.reload(remediation_module)
+        mock_client.ping.assert_called_once()
 ```
 
-**Estimated effort:** 2 tests, ~30 minutes
+**Estimated effort:** 2 tests, ~30 minutes (module reload + import mocking overhead)
 
 ## Cosmetic Gaps (Confirmed, No Action Needed)
 
