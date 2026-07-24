@@ -229,6 +229,63 @@ class TestCooldownGate:
             f"but got outcome={result.outcome!r}"
         )
 
+    def test_redis_ttl_zero_does_not_block_action(self):
+        """
+        Regression test for remediation.py:119 (ttl > 0 boundary).
+
+        Scenario: Redis returns ttl=0 (key exists but expired or no expiration).
+        Expected: Action should NOT be blocked (cooldown is not active).
+        """
+        from unittest.mock import MagicMock
+
+        container = remediation.TARGET_CONTAINER
+
+        # Create mock Redis client that returns ttl=0 (key expired/no expiration)
+        mock_redis = MagicMock()
+        mock_redis.ttl.return_value = 0
+        remediation._redis_client = mock_redis
+
+        # Clear in-memory state to ensure we're testing Redis path only
+        remediation._last_action_ts.clear()
+
+        # Execute action - should NOT be blocked (ttl=0 means expired/no cooldown)
+        result = execute_action("RESTART", make_analysis("RESTART", 0.95))
+        assert result.outcome in ("dry_run", "failed"), (
+            f"Expected action to proceed when ttl=0 (no active cooldown), "
+            f"but got outcome={result.outcome!r}"
+        )
+        mock_redis.ttl.assert_called_once_with(f"cooldown:{container}")
+
+    def test_redis_ttl_one_blocks_action(self):
+        """
+        Regression test for remediation.py:119 (ttl > 0 boundary).
+
+        Scenario: Redis returns ttl=1 (key has 1 second remaining).
+        Expected: Action SHOULD be blocked (cooldown is still active).
+
+        This catches the mutation from "if ttl > 0:" to "if ttl > 1:"
+        which would incorrectly allow actions when ttl==1.
+        """
+        from unittest.mock import MagicMock
+
+        container = remediation.TARGET_CONTAINER
+
+        # Create mock Redis client that returns ttl=1 (1 second remaining)
+        mock_redis = MagicMock()
+        mock_redis.ttl.return_value = 1
+        remediation._redis_client = mock_redis
+
+        # Clear in-memory state to ensure we're testing Redis path only
+        remediation._last_action_ts.clear()
+
+        # Execute action - should BE blocked (ttl=1 means cooldown still active)
+        result = execute_action("RESTART", make_analysis("RESTART", 0.95))
+        assert result.outcome == "skipped", (
+            f"Expected action skipped by cooldown when ttl=1, "
+            f"but got outcome={result.outcome!r}"
+        )
+        mock_redis.ttl.assert_called_once_with(f"cooldown:{container}")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Gate 3 — dry-run
