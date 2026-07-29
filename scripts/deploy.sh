@@ -226,18 +226,15 @@ verify_deployment() {
     # This works regardless of port mappings
     log_info "Checking Docker health status..."
 
-    # Get list of unhealthy containers
-    unhealthy=$(docker compose ${COMPOSE_FILES} ps --format json | \
-        jq -r 'select(.Health != "" and .Health != "healthy") | .Name' 2>/dev/null || true)
-
-    if [ -n "$unhealthy" ]; then
-        log_error "❌ Unhealthy containers found:"
-        echo "$unhealthy"
-        log_error "Check logs with: docker compose logs"
+    # Check if any containers are unhealthy or exited
+    if docker compose ${COMPOSE_FILES} ps | grep -E "(unhealthy|Exited)"; then
+        log_error "❌ Unhealthy or stopped containers detected"
+        log_error "Full status:"
+        docker compose ${COMPOSE_FILES} ps
         return 1
     fi
 
-    log_info "✅ All services are healthy"
+    log_info "✅ All services are running"
 }
 
 cleanup_old_images() {
