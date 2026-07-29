@@ -11,7 +11,9 @@
 #   5. Cleans up old images
 #
 
+echo "DEBUG: Script starting, bash version: $BASH_VERSION" >&2
 set -euo pipefail
+echo "DEBUG: set -euo pipefail completed" >&2
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration
@@ -306,6 +308,7 @@ show_deployment_summary() {
 }
 
 rollback() {
+    echo "DEBUG: !!!ROLLBACK TRIGGERED!!! Exit code: $? Line: ${BASH_LINENO[*]}" >&2
     log_error "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     log_error "DEPLOYMENT FAILED - INITIATING AUTOMATIC ROLLBACK"
     log_error "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -349,16 +352,18 @@ rollback() {
 # ─────────────────────────────────────────────────────────────────────────────
 
 main() {
-    echo "DEBUG: main() called with IMAGE_TAG=${IMAGE_TAG}" >&2
-    log_info "Starting Aether-Guard deployment (tag: ${IMAGE_TAG})..."
+    echo "DEBUG: main() START" >&2
+    echo "DEBUG: IMAGE_TAG=${IMAGE_TAG}" >&2
+    echo "INFO: Starting Aether-Guard deployment (tag: ${IMAGE_TAG})..." >&2
 
     # Set trap for automatic rollback on error
-    echo "DEBUG: Setting ERR trap" >&2
+    echo "DEBUG: About to set ERR trap" >&2
     trap rollback ERR
+    echo "DEBUG: ERR trap set successfully" >&2
 
-    echo "DEBUG: Calling check_prerequisites" >&2
+    echo "DEBUG: About to call check_prerequisites" >&2
     check_prerequisites
-    echo "DEBUG: check_prerequisites completed successfully" >&2
+    echo "DEBUG: check_prerequisites returned successfully" >&2
 
     echo "DEBUG: Calling backup_current_state" >&2
     backup_current_state
@@ -389,4 +394,6 @@ main() {
 }
 
 # Execute main function
+echo "DEBUG: About to call main with args: $@" >&2
 main "$@"
+echo "DEBUG: main returned successfully!" >&2
