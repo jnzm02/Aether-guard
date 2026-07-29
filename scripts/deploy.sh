@@ -227,14 +227,15 @@ verify_deployment() {
     log_info "Checking Docker health status..."
 
     # Check if any containers are unhealthy or exited
-    if docker compose ${COMPOSE_FILES} ps | grep -E "(unhealthy|Exited)"; then
+    # Note: grep returns 1 if no match found, so we need || true to avoid triggering error trap
+    if docker compose ${COMPOSE_FILES} ps | grep -qE "(unhealthy|Exited)" 2>/dev/null; then
         log_error "❌ Unhealthy or stopped containers detected"
         log_error "Full status:"
         docker compose ${COMPOSE_FILES} ps
         return 1
     fi
 
-    log_info "✅ All services are running"
+    log_info "✅ All services are running and healthy"
 }
 
 cleanup_old_images() {
