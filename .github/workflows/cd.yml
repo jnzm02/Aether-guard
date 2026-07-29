@@ -168,8 +168,10 @@ jobs:
             ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/home/user/aether-guard/infra/
 
           # Copy deployment script
+          echo "📋 Copying deploy.sh to server..."
           scp -i ~/.ssh/deploy_key scripts/deploy.sh \
             ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/home/user/aether-guard/scripts/
+          echo "✅ deploy.sh copied"
 
       - name: Copy environment configuration
         run: |
@@ -194,6 +196,11 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
             cd /home/user/aether-guard
+
+            # Verify deploy.sh was updated
+            echo "🔍 Checking deploy.sh on server..."
+            head -20 scripts/deploy.sh
+            echo "---"
 
             # Login to private registry
             echo "${{ secrets.DOCKER_REGISTRY_PASSWORD }}" | docker login ${{ secrets.DOCKER_REGISTRY }} \
