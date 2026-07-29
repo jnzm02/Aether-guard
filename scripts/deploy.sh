@@ -215,37 +215,25 @@ verify_deployment() {
     fi
 
     # Wait for all services to stabilize
-    sleep 20
+    log_info "Waiting 30s for services to stabilize..."
+    sleep 30
 
     # Check container status
     log_info "Container status:"
     docker compose ${COMPOSE_FILES} ps
 
-    # Health check endpoints
-    HEALTH_ENDPOINTS=(
-        "http://localhost:8080/health|target-service"
-        "http://localhost:8081/health|listener"
-        "http://localhost:8082/health|agent"
-        "http://localhost:9090/-/healthy|prometheus"
-        "http://localhost:9093/-/healthy|alertmanager"
-    )
+    # Use Docker's built-in health checks instead of curl
+    # This works regardless of port mappings
+    log_info "Checking Docker health status..."
 
-    all_healthy=true
-    for endpoint_info in "${HEALTH_ENDPOINTS[@]}"; do
-        IFS='|' read -r endpoint name <<< "$endpoint_info"
+    # Get list of unhealthy containers
+    unhealthy=$(docker compose ${COMPOSE_FILES} ps --format json | \
+        jq -r 'select(.Health != "" and .Health != "healthy") | .Name' 2>/dev/null || true)
 
-        log_info "Checking ${name} health: ${endpoint}"
-
-        if curl -sf "${endpoint}" > /dev/null; then
-            log_info "✅ ${name} is healthy"
-        else
-            log_error "❌ ${name} health check failed"
-            all_healthy=false
-        fi
-    done
-
-    if [ "$all_healthy" = false ]; then
-        log_error "Health checks failed. Check logs with: docker compose logs"
+    if [ -n "$unhealthy" ]; then
+        log_error "❌ Unhealthy containers found:"
+        echo "$unhealthy"
+        log_error "Check logs with: docker compose logs"
         return 1
     fi
 
