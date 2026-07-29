@@ -49,27 +49,35 @@ log_error() {
 check_prerequisites() {
     log_info "Checking prerequisites..."
 
+    log_info "→ Checking Docker..."
     if ! command -v docker &> /dev/null; then
         log_error "Docker is not installed"
         exit 1
     fi
+    log_info "  ✓ Docker found"
 
+    log_info "→ Checking Docker Compose..."
     if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
         log_error "Docker Compose is not installed"
         exit 1
     fi
+    log_info "  ✓ Docker Compose found"
 
+    log_info "→ Checking environment file: ${ENV_FILE}"
     if [ ! -f "${ENV_FILE}" ]; then
         log_error "Environment file not found: ${ENV_FILE}"
         exit 1
     fi
+    log_info "  ✓ Environment file exists"
 
+    log_info "→ Checking compose file: ${COMPOSE_FILE}"
     if [ ! -f "${COMPOSE_FILE}" ]; then
         log_error "Docker Compose file not found: ${COMPOSE_FILE}"
         exit 1
     fi
+    log_info "  ✓ Compose file exists"
 
-    log_info "✅ Prerequisites check passed"
+    log_info "✅ All prerequisites passed"
 }
 
 backup_current_state() {
