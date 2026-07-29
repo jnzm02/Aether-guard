@@ -165,6 +165,7 @@ jobs:
           # Create production .env file from secrets
           cat > .env.production << EOF
           ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
+          REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
           CLAUDE_MODEL=claude-sonnet-4-5-20250929
           CONFIDENCE_THRESHOLD=0.75
           DRY_RUN=false
