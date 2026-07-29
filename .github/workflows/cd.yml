@@ -86,6 +86,17 @@ jobs:
           cache-from: type=registry,ref=${{ secrets.DOCKER_REGISTRY }}/aether-guard/agent:buildcache
           cache-to: type=registry,ref=${{ secrets.DOCKER_REGISTRY }}/aether-guard/agent:buildcache,mode=max
 
+      - name: Build & Push event-tracker
+        uses: docker/build-push-action@v5
+        with:
+          context: ./services/event-tracker
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_REGISTRY }}/aether-guard/event-tracker:${{ github.sha }}
+            ${{ secrets.DOCKER_REGISTRY }}/aether-guard/event-tracker:latest
+          cache-from: type=registry,ref=${{ secrets.DOCKER_REGISTRY }}/aether-guard/event-tracker:buildcache
+          cache-to: type=registry,ref=${{ secrets.DOCKER_REGISTRY }}/aether-guard/event-tracker:buildcache,mode=max
+
       - name: Send Telegram notification - Build completed
         if: success()
         continue-on-error: true
@@ -94,7 +105,7 @@ jobs:
             curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
               -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
               -d parse_mode="Markdown" \
-              -d text="✅ *Build & Push Completed*%0A%0A📦 Images pushed to registry:%0A\`• target-service:${GITHUB_SHA:0:7}\`%0A\`• listener:${GITHUB_SHA:0:7}\`%0A\`• agent:${GITHUB_SHA:0:7}\`%0A%0A⏭️ Next: Deploying to server..."
+              -d text="✅ *Build & Push Completed*%0A%0A📦 Images pushed to registry:%0A\`• target-service:${GITHUB_SHA:0:7}\`%0A\`• listener:${GITHUB_SHA:0:7}\`%0A\`• agent:${GITHUB_SHA:0:7}\`%0A\`• event-tracker:${GITHUB_SHA:0:7}\`%0A%0A⏭️ Next: Deploying to server..."
           fi
 
       - name: Send Telegram notification - Build failed
