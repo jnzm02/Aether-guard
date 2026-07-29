@@ -131,34 +131,34 @@ jobs:
       - name: Create directory structure on server
         run: |
           ssh -i ~/.ssh/deploy_key ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'ENDSSH'
-            mkdir -p /opt/aether-guard/{infra,scripts,backups,data}
-            mkdir -p /opt/aether-guard/infra/{prometheus,alertmanager,grafana}
+            mkdir -p /home/user/aether-guard/{infra,scripts,backups,data}
+            mkdir -p /home/user/aether-guard/infra/{prometheus,alertmanager,grafana}
           ENDSSH
 
       - name: Copy deployment files to server
         run: |
           # Copy docker-compose files
           scp -i ~/.ssh/deploy_key infra/docker-compose.yml \
-            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/opt/aether-guard/infra/
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/home/user/aether-guard/infra/
 
           scp -i ~/.ssh/deploy_key infra/docker-compose.prod.yml \
-            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/opt/aether-guard/infra/
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/home/user/aether-guard/infra/
 
           # Copy prometheus config
           scp -i ~/.ssh/deploy_key -r infra/prometheus \
-            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/opt/aether-guard/infra/
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/home/user/aether-guard/infra/
 
           # Copy alertmanager config
           scp -i ~/.ssh/deploy_key -r infra/alertmanager \
-            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/opt/aether-guard/infra/
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/home/user/aether-guard/infra/
 
           # Copy grafana config
           scp -i ~/.ssh/deploy_key -r infra/grafana \
-            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/opt/aether-guard/infra/
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/home/user/aether-guard/infra/
 
           # Copy deployment script
           scp -i ~/.ssh/deploy_key scripts/deploy.sh \
-            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/opt/aether-guard/scripts/
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/home/user/aether-guard/scripts/
 
       - name: Copy environment configuration
         run: |
@@ -177,12 +177,12 @@ jobs:
           EOF
 
           scp -i ~/.ssh/deploy_key .env.production \
-            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/opt/aether-guard/.env
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/home/user/aether-guard/.env
 
       - name: Deploy application
         run: |
           ssh -i ~/.ssh/deploy_key ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
-            cd /opt/aether-guard
+            cd /home/user/aether-guard
 
             # Login to private registry
             echo "${{ secrets.DOCKER_REGISTRY_PASSWORD }}" | docker login ${{ secrets.DOCKER_REGISTRY }} \
@@ -259,11 +259,11 @@ jobs:
 
             echo ""
             echo "=== Disk Usage ==="
-            df -h /opt/aether-guard
+            df -h /home/user/aether-guard
 
             echo ""
             echo "=== Recent Logs (last 20 lines) ==="
-            cd /opt/aether-guard/infra
+            cd /home/user/aether-guard/infra
             docker compose logs --tail=20
           EOF
 
@@ -319,7 +319,7 @@ jobs:
       - name: Execute rollback
         run: |
           ssh -i ~/.ssh/deploy_key ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
-            cd /opt/aether-guard
+            cd /home/user/aether-guard
 
             echo "⚠️  Rolling back to previous deployment..."
 

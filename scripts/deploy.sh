@@ -17,7 +17,7 @@ set -euo pipefail
 # Configuration
 # ─────────────────────────────────────────────────────────────────────────────
 
-DEPLOY_DIR="/opt/aether-guard"
+DEPLOY_DIR="/home/user/aether-guard"
 IMAGE_TAG="${1:-latest}"
 COMPOSE_FILE="${DEPLOY_DIR}/infra/docker-compose.yml"
 ENV_FILE="${DEPLOY_DIR}/.env"
