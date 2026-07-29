@@ -36,12 +36,20 @@ spec:
           image: redis:7-alpine
           ports:
             - containerPort: 6379
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-password
+                  key: password
           command:
-            - redis-server
-            - --appendonly
-            - "yes"
-            - --appendfsync
-            - everysec
+            - sh
+            - -c
+            - |
+              redis-server \
+                --appendonly yes \
+                --appendfsync everysec \
+                --requirepass "$REDIS_PASSWORD"
           resources:
             requests:
               memory: "128Mi"
@@ -52,14 +60,16 @@ spec:
           livenessProbe:
             exec:
               command:
-                - redis-cli
-                - ping
+                - sh
+                - -c
+                - redis-cli -a "$REDIS_PASSWORD" ping
             initialDelaySeconds: 10
             periodSeconds: 10
           readinessProbe:
             exec:
               command:
-                - redis-cli
-                - ping
+                - sh
+                - -c
+                - redis-cli -a "$REDIS_PASSWORD" ping
             initialDelaySeconds: 5
             periodSeconds: 5

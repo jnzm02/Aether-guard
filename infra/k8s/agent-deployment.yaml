@@ -52,8 +52,13 @@ spec:
                 secretKeyRef:
                   name: aether-guard-secrets
                   key: postgres-url
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-password
+                  key: password
             - name: REDIS_URL
-              value: "redis://redis:6379/0"
+              value: "redis://:$(REDIS_PASSWORD)@redis:6379/0"
             - name: LISTENER_URL
               value: "http://listener:8081"  # If listener were in-cluster (it's not for this demo)
             - name: ANALYSIS_LOG_PATH

@@ -81,7 +81,19 @@ services:
         max-file: "3"
     restart: always
 
+  postgres:
+    # SECURITY: Remove port mapping in production - Postgres should only be accessible via internal network
+    ports: []
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: always
+
   redis:
+    # SECURITY: Remove port mapping in production - Redis should only be accessible via internal network
+    ports: []
     deploy:
       resources:
         limits:
