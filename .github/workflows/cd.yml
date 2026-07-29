@@ -331,7 +331,14 @@ jobs:
 
             # Restore previous docker-compose state
             cd infra
-            docker compose down
+
+            # Clean up thoroughly to avoid container name conflicts
+            docker compose down --remove-orphans
+            docker ps -a --filter "name=redis" --filter "name=postgres" --filter "name=agent" \
+                --filter "name=tempo" --filter "name=grafana" --filter "name=prometheus" \
+                --filter "name=alertmanager" --filter "name=listener" --filter "name=target-service" \
+                --filter "name=event-tracker" --format "{{.ID}}" | xargs -r docker rm -f 2>/dev/null || true
+
             docker compose up -d
 
             echo "✅ Rollback complete. Verify services:"

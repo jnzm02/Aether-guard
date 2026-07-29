@@ -303,7 +303,14 @@ rollback() {
 
     # Restart services with previous configuration
     log_info "Stopping current containers..."
-    docker compose down
+    docker compose down --remove-orphans
+
+    # Extra cleanup to handle container name conflicts
+    log_info "Cleaning up any leftover containers..."
+    docker ps -a --filter "name=redis" --filter "name=postgres" --filter "name=agent" \
+        --filter "name=tempo" --filter "name=grafana" --filter "name=prometheus" \
+        --filter "name=alertmanager" --filter "name=listener" --filter "name=target-service" \
+        --filter "name=event-tracker" --format "{{.ID}}" | xargs -r docker rm -f 2>/dev/null || true
 
     log_info "Starting previous version..."
     docker compose up -d
