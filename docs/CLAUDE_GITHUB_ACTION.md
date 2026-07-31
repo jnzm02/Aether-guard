@@ -20,6 +20,11 @@ and inherit this repo's harness — `CLAUDE.md`, `.claude/agents/`, and `.mcp.js
    > This is separate from the `ANTHROPIC_API_KEY` **placeholder** the CI test job
    > sets inline — that one is a dummy for `DRY_RUN` tests. The workflows here need a
    > real key from the repository **secret** to call the model.
+   >
+   > If the key is invalid/unfunded, the review run fails with `total_cost_usd: 0`
+   > and zero completed turns. As a stopgap, `claude-review.yml` sets
+   > `continue-on-error: true` so a failing review doesn't red-X your PRs. **Once the
+   > key works, remove that line** so genuine review failures surface again.
 
 2. **Merge this PR.** The workflows activate once on `main`.
 
