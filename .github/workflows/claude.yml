@@ -1,0 +1,54 @@
+name: Claude
+
+# Interactive assistant: mention @claude in an issue, a PR, or a review comment
+# and Claude Code runs in this repo with full access to CLAUDE.md, the subagents,
+# and .mcp.json. It can answer, investigate, or implement a fix as a commit/PR.
+#
+# Requires repository secret ANTHROPIC_API_KEY (Settings → Secrets and variables →
+# Actions). The action only acts for users who already have write access.
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+  issues:
+    types: [opened, assigned]
+
+jobs:
+  claude:
+    # Only start the job when @claude is actually mentioned.
+    if: >
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+    runs-on: ubuntu-latest
+    concurrency:
+      group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: false
+    permissions:
+      contents: write        # allow @claude to implement fixes as commits/branches
+      pull-requests: write
+      issues: write
+      id-token: write        # OIDC, required by the action
+      actions: read          # read CI results to help diagnose failures
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Claude Code
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Use the built-in Actions token so the Claude GitHub App is NOT required.
+          # (The action only falls back to the App's OIDC token exchange when this
+          # is omitted.) Install the App later if you want signed commits.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Pin a model the account can access (the action's default may be a
+          # preview model this key isn't entitled to).
+          claude_args: '--model claude-sonnet-4-5'
