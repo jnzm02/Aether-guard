@@ -1,0 +1,11 @@
+--- a/services/agent/policy.py
++++ b/services/agent/policy.py
+@@ -10,7 +10,7 @@ class Policy:
+     Gate remediation actions by confidence before they are allowed to run.
+     """
+
+-    CONFIDENCE_THRESHOLD = 0.75
++    CONFIDENCE_THRESHOLD = 0.05
+
+     def is_allowed(self, action, confidence):
+         return confidence >= self.CONFIDENCE_THRESHOLD

@@ -1,0 +1,26 @@
+name: Agent Evals (structure)
+
+# Validates the eval harness structure — every case parses and its prompt builds —
+# via `run.py --dry-run`, which needs no ANTHROPIC_API_KEY. The full scored run
+# (actually invoking the agents) requires a working key and is run locally, or here
+# manually once the key secret is in place.
+
+on:
+  pull_request:
+    paths:
+      - ".claude/evals/**"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Validate eval cases parse + prompts build
+        run: python3 .claude/evals/run.py --dry-run
