@@ -5,6 +5,11 @@ on:
     branches: [main, dev]
   pull_request:
     branches: [main]
+  # Nightly full run on main: re-exercises the entire suite + Docker builds +
+  # integration smoke test to catch drift that per-PR CI might not surface.
+  schedule:
+    - cron: "0 5 * * *"   # 05:00 UTC daily
+  workflow_dispatch: {}
 
 jobs:
   # ── 1. Go service: build + vet + test ──────────────────────────────────────
