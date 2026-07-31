@@ -67,7 +67,7 @@ services:
       - MONITORED_JOB=${MONITORED_JOB:-target-service}
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - ./prometheus/rules:/etc/prometheus/rules  # Writable - entrypoint renders templates here
       - ./prometheus/docker-entrypoint.sh:/docker-entrypoint.sh:ro
       - prometheus_data:/prometheus
     entrypoint: ["/docker-entrypoint.sh"]
