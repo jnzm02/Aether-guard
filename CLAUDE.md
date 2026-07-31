@@ -133,6 +133,9 @@ This repo ships its own Claude Code configuration under `.claude/`:
 - **Status line** (`.claude/statusline.sh`, wired via `settings.json` `statusLine`):
   shows `📁 dir · ⎇ branch(*dirty) · 🧠 model · +added/-removed`. Override it in your
   personal `.claude/settings.local.json` if you prefer a different one.
+- **Workflows** (`.claude/workflows/`): saved multi-agent teams. `feature-team` runs
+  plan → parallel design → adversarial review → synthesize to produce a vetted
+  implementation plan. Opt-in (say "use a workflow"); see `.claude/workflows/README.md`.
 
 ## Docs worth reading
 
