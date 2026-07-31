@@ -49,3 +49,6 @@ jobs:
           # (The action only falls back to the App's OIDC token exchange when this
           # is omitted.) Install the App later if you want signed commits.
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Pin a model the account can access (the action's default may be a
+          # preview model this key isn't entitled to).
+          claude_args: '--model claude-sonnet-4-5'

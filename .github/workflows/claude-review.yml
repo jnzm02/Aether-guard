@@ -55,4 +55,7 @@ jobs:
               concrete failure scenario. Rank most-severe first.
             - If the PR looks good, say so briefly instead of inventing nits.
             - Do NOT approve, merge, or push commits — just leave one review comment.
-          claude_args: '--max-turns 20'
+          # Pin a model the account has access to. The action's default can be a
+          # brand-new model (e.g. an opus-*[1m] preview) that a key without that
+          # entitlement can't call — which fails the run with cost 0 / is_error.
+          claude_args: '--model claude-sonnet-4-5 --max-turns 20'
