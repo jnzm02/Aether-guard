@@ -33,6 +33,8 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Built-in token → no Claude GitHub App install required for reviews.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: |
             You are reviewing a pull request for Aether-Guard, an autonomous AI SRE
             agent that takes real remediation actions. Read the PR diff and give a

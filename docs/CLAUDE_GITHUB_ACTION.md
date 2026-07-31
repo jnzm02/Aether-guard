@@ -26,6 +26,21 @@ and inherit this repo's harness — `CLAUDE.md`, `.claude/agents/`, and `.mcp.js
 3. **Try it:** open an issue or PR comment containing `@claude ...`, or just open a PR
    and watch the review comment appear.
 
+### GitHub authentication — no App required
+
+These workflows pass `github_token: ${{ secrets.GITHUB_TOKEN }}`, the built-in Actions
+token, so the **Claude GitHub App does not need to be installed**. The action only falls
+back to the App's OIDC token exchange when `github_token` is omitted — which is what
+produced the `Claude Code is not installed on this repository` error before this was set.
+
+Optionally install the official App (`/install-github-app` from Claude Code, or
+<https://github.com/apps/claude>) if you want:
+- **signed commits** from `@claude`, and
+- commits it pushes to **trigger downstream workflows** (GitHub intentionally does not
+  re-trigger workflows for pushes made with the built-in `GITHUB_TOKEN`).
+
+For review comments and most `@claude` interactions, the built-in token is enough.
+
 ## Cost & scope controls (already applied)
 
 - The review job skips **draft** PRs and uses `concurrency: cancel-in-progress`, so
