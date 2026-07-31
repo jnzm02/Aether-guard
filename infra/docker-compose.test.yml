@@ -1,0 +1,54 @@
+version: "3.9"
+
+# Phase A.4 validation stack:
+# - target-service with Postgres + Redis for Pattern 6 testing
+# - Stop postgres/redis to validate dependency failure logs
+
+networks:
+  test-net:
+    driver: bridge
+
+services:
+  target-service:
+    build: ../services/target-service
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - POSTGRES_URL=postgres://testuser:testpass@postgres:5432/testdb
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=testpass
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - test-net
+    # Memory limit for Pattern 1 (OOM Kill) testing
+    mem_limit: 256m
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=testuser
+      - POSTGRES_PASSWORD=testpass
+      - POSTGRES_DB=testdb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U testuser -d testdb"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    networks:
+      - test-net
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --requirepass testpass
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "testpass", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    networks:
+      - test-net
