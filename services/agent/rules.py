@@ -131,6 +131,10 @@ class RuleEngine:
         if rule:
             return rule
 
+        rule = self._check_disk_pressure(alert, logs)
+        if rule:
+            return rule
+
         # ── Medium-confidence rules (heuristics, synchronous) ─────────────────────
         rule = self._check_dependency_failure(logs)
         if rule:
@@ -532,6 +536,46 @@ class RuleEngine:
                     "Traffic spike is overwhelming current capacity. "
                     f"{', '.join(signals)}. "
                     "SCALE horizontally to handle increased load."
+                ),
+            )
+        return None
+
+    def _check_disk_pressure(self, alert: dict, logs: list[str]) -> Optional[RuleMatch]:
+        """
+        Detect disk exhaustion from ENOSPC log signatures.
+
+        Learned from recorded incidents (see scripts/propose_rules.py): recurring
+        DiskPressure alerts were escalating to the LLM because no deterministic rule
+        covered them. Pattern: writes failing with "no space left on device".
+        Confidence: 0.93 (very specific kernel/syscall message)
+        Action: SCALE (add capacity/volume — RESTART does not reclaim space)
+        """
+        disk_patterns = [
+            r"no space left on device",
+            r"disk (?:usage|full)",
+            r"ENOSPC",
+            r"write failed.*space",
+        ]
+
+        evidence = []
+        for line in logs:
+            for pattern in disk_patterns:
+                if re.search(pattern, line, re.IGNORECASE):
+                    evidence.append(line.strip())
+                    break
+
+        if evidence:
+            return RuleMatch(
+                matched=True,
+                rule_name="DISK_PRESSURE",
+                root_cause=RootCauseCategory.DISK_PRESSURE,
+                confidence=0.93,
+                evidence=evidence[:3],
+                recommended_action="SCALE",
+                reasoning=(
+                    "Disk is exhausted — writes are failing with ENOSPC. "
+                    f"{'; '.join(evidence[:2])}. "
+                    "SCALE to add capacity; a RESTART would not reclaim space."
                 ),
             )
         return None

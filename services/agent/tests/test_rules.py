@@ -587,3 +587,35 @@ async def test_cpu_saturation_action_routing(cpu, traffic, expected_action):
     else:
         assert result is not None
         assert result.recommended_action == expected_action
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DISK_PRESSURE  (learned rule — see scripts/propose_rules.py)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestDiskPressure:
+    """The disk-pressure rule added from recorded incidents that were escalating."""
+
+    @pytest.mark.asyncio
+    async def test_disk_pressure_detected(self, engine, empty_alert, empty_metrics):
+        """ENOSPC signature in logs → matched as DISK_PRESSURE, action SCALE."""
+        logs = [
+            "2026-06-01 09:00:00 INFO serving requests",
+            "2026-06-01 09:05:00 ERROR write failed: no space left on device",
+            "2026-06-01 09:05:01 ERROR flush blocked: disk full",
+        ]
+        result = await engine.analyze(empty_alert, empty_metrics, logs)
+
+        assert result is not None
+        assert result.matched is True
+        assert result.rule_name == "DISK_PRESSURE"
+        assert result.root_cause == RootCauseCategory.DISK_PRESSURE
+        assert result.recommended_action == "SCALE"
+        assert result.confidence == 0.93
+        assert any("no space left on device" in e for e in result.evidence)
+
+    @pytest.mark.asyncio
+    async def test_no_disk_pressure_on_clean_logs(self, engine, empty_alert, empty_metrics):
+        """Unrelated logs → no false positive, escalates to LLM."""
+        logs = ["2026-06-01 09:00:00 INFO healthy", "request completed in 12ms"]
+        result = await engine.analyze(empty_alert, empty_metrics, logs)
+        assert result is None
