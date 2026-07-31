@@ -1,0 +1,65 @@
+name: Harness Gardener
+
+# Self-improvement loop for the Claude Code harness itself. Once a month, Claude
+# reviews the harness (.claude/ config, CLAUDE.md, subagents, commands, skills) and
+# recent activity, proposes small SAFE improvements, validates any agent/skill change
+# against the eval harness, and opens a PR for human review. It never edits product
+# code and never touches safety logic — it proposes, humans dispose.
+#
+# Requires the ANTHROPIC_API_KEY repo secret (same as the other Claude workflows).
+# Until that's set, the run fails fast; it does not block anything (schedule-only).
+
+on:
+  schedule:
+    - cron: "0 8 1 * *"   # 08:00 UTC, 1st of each month
+  workflow_dispatch: {}
+
+permissions:
+  contents: write        # to push the proposal branch
+  pull-requests: write   # to open the PR
+  id-token: write
+
+jobs:
+  gardener:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run the harness gardener
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          claude_args: "--model claude-sonnet-4-5 --max-turns 30"
+          prompt: |
+            You are the "harness gardener" for the Aether-Guard repo. Propose small,
+            SAFE improvements to the Claude Code harness — never to product code.
+
+            Steps:
+            1. Review CLAUDE.md and .claude/ (agents, commands, skills, hooks,
+               settings.json, evals) plus the last ~20 merged PRs (`git log`) for
+               friction: repeated manual steps, stale docs, gaps a subagent / command /
+               skill / eval case could fill.
+            2. Choose 1-3 concrete, low-risk, mostly-additive improvements. Examples:
+               a new slash command for a repeated task, a sharper subagent instruction,
+               a new eval case covering a gap, a CLAUDE.md correction.
+            3. If you change a subagent or skill, run the eval harness
+               (`python3 .claude/evals/run.py --dry-run`, and the full scored run if a
+               working key is available) and include the result. DO NOT adopt any change
+               that regresses the evals.
+            4. Open ONE pull request titled "chore(harness): gardener proposals" with the
+               changes and a one-line rationale for each. If nothing is worth changing,
+               open no PR and say so.
+
+            Hard rules:
+            - Only touch files under `.claude/`, `CLAUDE.md`, and `docs/`.
+            - NEVER edit anything under `services/`, and never weaken a safety layer.
+            - Keep the diff small and reviewable — this is a proposal for a human, not a
+              merge.
