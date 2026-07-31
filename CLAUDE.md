@@ -127,6 +127,9 @@ This repo ships its own Claude Code configuration under `.claude/`:
 - **Hook** (`.claude/hooks/format-edited-file.sh`, wired via `settings.json`
   `PostToolUse`): after any edit, `gofmt -w` Go files, and run `ruff check` on Python
   files — surfacing lint issues immediately so they're fixed before CI rejects them.
+- **Skills** (`.claude/skills/`): `verify` — verify a change end-to-end by driving a
+  real incident through the detect → RCA → policy → remediation → verification pipeline
+  and observing behavior, not just running unit tests.
 
 ## Docs worth reading
 
