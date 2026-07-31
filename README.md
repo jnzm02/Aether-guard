@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/jnzm02/Aether-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/jnzm02/Aether-guard/actions/workflows/ci.yml)
 [![CD](https://github.com/jnzm02/Aether-guard/actions/workflows/cd.yml/badge.svg)](https://github.com/jnzm02/Aether-guard/actions/workflows/cd.yml)
-![Go](https://img.shields.io/badge/Go-1.21-00ADD8?logo=go)
+![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go)
 ![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python)
 ![Prometheus](https://img.shields.io/badge/Prometheus-2.48-E6522C?logo=prometheus)
 ![Claude](https://img.shields.io/badge/Claude-Sonnet_4.5-8A2BE2)
@@ -674,7 +674,7 @@ Each runbook: thresholds → mitigation commands → PromQL investigation → es
 
 | Layer | Technology |
 |-------|-----------|
-| Monitored service | Go 1.21, `prometheus/client_golang`, `uber/zap` |
+| Monitored service | Go 1.25, `prometheus/client_golang`, `uber/zap` |
 | Metrics & alerting | Prometheus 2.48, Alertmanager 0.26, **Grafana 10.3** |
 | Alert enrichment | Python 3.11, FastAPI, Docker SDK |
 | **AI RCA engine (V2)** | **Hybrid: Rule Engine + Claude Sonnet 4.5** |
