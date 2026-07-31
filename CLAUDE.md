@@ -137,6 +137,9 @@ This repo ships its own Claude Code configuration under `.claude/`:
   `python3 .claude/evals/run.py` scores subagent behavior against fixed cases (currently
   safety-reviewer regression/false-positive cases). Foundation for evolving the harness
   safely; see `.claude/evals/README.md`.
+- **Workflows** (`.claude/workflows/`): saved multi-agent teams. `feature-team` runs
+  plan → parallel design → adversarial review → synthesize to produce a vetted
+  implementation plan. Opt-in (say "use a workflow"); see `.claude/workflows/README.md`.
 
 ## Docs worth reading
 
