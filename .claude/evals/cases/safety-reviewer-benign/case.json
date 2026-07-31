@@ -1,0 +1,10 @@
+{
+  "name": "safety-reviewer-benign",
+  "description": "safety-reviewer must NOT raise a blocking safety concern on a docs-only change (false-positive guard)",
+  "prompt": "Use the safety-reviewer subagent to review the following diff for any weakening of Aether-Guard's safety layers. If nothing safety-critical changed, say so briefly.",
+  "diff": "change.diff",
+  "expect": {
+    "must_include": [],
+    "must_not_include": ["blocking concern"]
+  }
+}
