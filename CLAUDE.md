@@ -107,3 +107,5 @@ CD/deploy debugging — be careful editing `scripts/deploy.sh`).
 - `docs/ARCHITECTURE_V2.md`, `docs/CICD-ARCHITECTURE.md` — deeper design.
 - `docs/BRING_YOUR_OWN_SERVICE.md` — onboarding a new monitored service.
 - `docs/runbooks/` — per-incident-type response runbooks.
+- `docs/MCP_SETUP.md` — connect Claude Code to live systems (GitHub, incident
+  Postgres, Grafana) via the checked-in `.mcp.json`. Secrets stay in your env.
