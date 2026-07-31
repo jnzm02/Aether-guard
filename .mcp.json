@@ -1,0 +1,27 @@
+{
+  "mcpServers": {
+    "github": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "headers": {
+        "Authorization": "Bearer ${GITHUB_TOKEN}"
+      }
+    },
+    "postgres": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-postgres",
+        "${AETHER_MCP_DB_URL:-postgresql://aether_guard:local_dev_password@localhost:5432/aether_guard}"
+      ]
+    },
+    "grafana": {
+      "command": "docker",
+      "args": ["run", "--rm", "-i", "-e", "GRAFANA_URL", "-e", "GRAFANA_API_KEY", "mcp/grafana", "-t", "stdio"],
+      "env": {
+        "GRAFANA_URL": "${GRAFANA_URL:-http://host.docker.internal:3001}",
+        "GRAFANA_API_KEY": "${GRAFANA_API_KEY}"
+      }
+    }
+  }
+}

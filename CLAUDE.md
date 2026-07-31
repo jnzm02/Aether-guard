@@ -53,18 +53,29 @@ cd services/target-service && go build ./... && go vet ./... && go test -race -c
 ```
 
 ### Python (`agent`, `listener`)
+
+**First time:** `make setup` creates a Python 3.11 virtualenv at `.venv` and installs
+all agent + listener deps and the CI-pinned ruff. Everything below (and the ruff hook
+and `test-runner` subagent) then works without depending on the ambient `python3`.
+
 ```bash
-# Lint (CI uses ruff 0.4.4):
+make setup        # one-time: build .venv (Python 3.11) + install deps
+make lint-py      # ruff-lint agent + listener + scripts (matches CI)
+make test-py      # run all Python unit tests (agent + listener) via .venv
+make test-agent   # agent suite only
+make test-listener
+```
+
+Under the hood these mirror CI (agent needs `PYTHONPATH=$PWD`; listener needs
+`--import-mode=importlib`). Manual equivalents if you've activated `.venv` yourself:
+```bash
 ruff check services/agent/ services/listener/ scripts/
-
-# Agent tests (set PYTHONPATH to the service dir):
-cd services/agent && PYTHONPATH=$PWD python3 -m pytest tests/ -v --tb=short
-
-# Listener tests (needs importlib import mode):
-cd services/listener && python3 -m pytest tests/ --import-mode=importlib -v
+cd services/agent && PYTHONPATH=$PWD python -m pytest tests/ -v --tb=short
+cd services/listener && python -m pytest tests/ --import-mode=importlib -v
 ```
 Python is **3.11**. Tests run with `ANTHROPIC_API_KEY` set to a placeholder and
-`DRY_RUN=true` — no real Claude calls or real remediation happen in tests.
+`DRY_RUN=true` — no real Claude calls or real remediation happen in tests. (Harmless
+`exporting traces to tempo:4317` warnings appear when no Tempo is running — ignore them.)
 
 ### Full stack
 ```bash
@@ -101,9 +112,33 @@ CD/deploy debugging — be careful editing `scripts/deploy.sh`).
 - Config is environment-driven (`PROMETHEUS_URL`, `TARGET_CONTAINER`,
   `CONFIDENCE_THRESHOLD`, `POLL_INTERVAL`, etc.) — see `.env.example`.
 
+## Claude Code harness
+
+This repo ships its own Claude Code configuration under `.claude/`:
+
+- **Subagents** (`.claude/agents/`): `safety-reviewer` (guards the 6-layer safety
+  pipeline), `test-runner` (runs per-service lint + tests like CI), `deploy-debugger`
+  (CD / `deploy.sh` / compose failures).
+- **Slash commands** (`.claude/commands/`):
+  - `/run-ci [all|go|python]` — run the CI checks locally for changed services.
+  - `/safety-check` — review the current diff for weakened safety layers.
+  - `/diagnose-cd [run-id|PR#]` — triage the latest failed CD/CI run.
+  - `/new-runbook <slug>` — scaffold a `docs/runbooks/` entry in the repo format.
+- **Hook** (`.claude/hooks/format-edited-file.sh`, wired via `settings.json`
+  `PostToolUse`): after any edit, `gofmt -w` Go files, and run `ruff check` on Python
+  files — surfacing lint issues immediately so they're fixed before CI rejects them.
+- **Skills** (`.claude/skills/`): `verify` — verify a change end-to-end by driving a
+  real incident through the detect → RCA → policy → remediation → verification pipeline
+  and observing behavior, not just running unit tests.
+- **Status line** (`.claude/statusline.sh`, wired via `settings.json` `statusLine`):
+  shows `📁 dir · ⎇ branch(*dirty) · 🧠 model · +added/-removed`. Override it in your
+  personal `.claude/settings.local.json` if you prefer a different one.
+
 ## Docs worth reading
 
 - `README.md` — full architecture and the V2 6-layer pipeline.
 - `docs/ARCHITECTURE_V2.md`, `docs/CICD-ARCHITECTURE.md` — deeper design.
 - `docs/BRING_YOUR_OWN_SERVICE.md` — onboarding a new monitored service.
 - `docs/runbooks/` — per-incident-type response runbooks.
+- `docs/MCP_SETUP.md` — connect Claude Code to live systems (GitHub, incident
+  Postgres, Grafana) via the checked-in `.mcp.json`. Secrets stay in your env.

@@ -7,7 +7,12 @@ SERVICE_DIR := services/target-service
 INFRA_DIR   := infra
 
 .PHONY: help build run test deps tidy docker-up docker-down chaos-memleak \
-        chaos-latency chaos-error chaos-reset load-baseline load-all metrics
+        chaos-latency chaos-error chaos-reset load-baseline load-all metrics \
+        setup lint-py test-py test-agent test-listener
+
+# Python dev virtualenv (created by `make setup`, see scripts/dev-setup.sh)
+VENV     := .venv
+VENV_PY  := $(CURDIR)/$(VENV)/bin/python
 
 help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -38,6 +43,22 @@ run: ## Run the target-service locally (no Docker)
 
 test: ## Run unit tests
 	cd $(SERVICE_DIR) && go test ./... -v -race -count=1
+
+# ── Python dev environment ────────────────────────────────────────────────────
+
+setup: ## Bootstrap the Python 3.11 dev virtualenv (.venv) and install all deps
+	./scripts/dev-setup.sh
+
+lint-py: ## Ruff-lint the Python services + scripts (matches CI)
+	"$(VENV_PY)" -m ruff check services/agent/ services/listener/ scripts/
+
+test-py: test-agent test-listener ## Run all Python unit tests (agent + listener)
+
+test-agent: ## Run the agent test suite (uses .venv)
+	cd services/agent && PYTHONPATH="$$PWD" "$(VENV_PY)" -m pytest tests/ -v --tb=short
+
+test-listener: ## Run the listener test suite (uses .venv)
+	cd services/listener && "$(VENV_PY)" -m pytest tests/ --import-mode=importlib -v --tb=short
 
 # ── Docker Compose ────────────────────────────────────────────────────────────
 

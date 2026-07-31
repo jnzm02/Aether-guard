@@ -1,5 +1,6 @@
 # ── Secrets — never commit these ──────────────────────────────────────────────
 .env
+.env.mcp
 infra/terraform/terraform.tfvars
 infra/terraform/.terraform/
 infra/terraform/.terraform.lock.hcl
@@ -13,6 +14,7 @@ services/target-service/target-service
 
 # ── Python cache ───────────────────────────────────────────────────────────────
 __pycache__/
+.venv/
 *.pyc
 *.pyo
 .venv/
