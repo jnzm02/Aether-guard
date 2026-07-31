@@ -11,9 +11,7 @@
 #   5. Cleans up old images
 #
 
-echo "DEBUG: Script starting, bash version: $BASH_VERSION" >&2
 set -euo pipefail
-echo "DEBUG: set -euo pipefail completed" >&2
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration
@@ -50,50 +48,31 @@ log_error() {
 
 check_prerequisites() {
     log_info "Checking prerequisites..."
-    echo "DEBUG: check_prerequisites called" >&2
-    echo "DEBUG: About to check Docker" >&2
 
-    log_info "→ Checking Docker..."
     if ! command -v docker &> /dev/null; then
         log_error "Docker is not installed"
         exit 1
     fi
-    echo "DEBUG: Docker check passed" >&2
-    log_info "  ✓ Docker found"
 
-    echo "DEBUG: About to check Docker Compose" >&2
-    log_info "→ Checking Docker Compose..."
     if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
         log_error "Docker Compose is not installed"
         exit 1
     fi
-    echo "DEBUG: Docker Compose check passed" >&2
-    log_info "  ✓ Docker Compose found"
 
-    echo "DEBUG: About to check env file: ${ENV_FILE}" >&2
-    log_info "→ Checking environment file: ${ENV_FILE}"
     if [ ! -f "${ENV_FILE}" ]; then
         log_error "Environment file not found: ${ENV_FILE}"
         exit 1
     fi
-    echo "DEBUG: ENV file exists" >&2
-    log_info "  ✓ Environment file exists"
 
-    echo "DEBUG: About to check compose file: ${COMPOSE_FILE}" >&2
-    log_info "→ Checking compose file: ${COMPOSE_FILE}"
     if [ ! -f "${COMPOSE_FILE}" ]; then
         log_error "Docker Compose file not found: ${COMPOSE_FILE}"
         exit 1
     fi
-    echo "DEBUG: Compose file exists" >&2
-    log_info "  ✓ Compose file exists"
 
-    echo "DEBUG: All checks passed, exiting function" >&2
     log_info "✅ All prerequisites passed"
 }
 
 backup_current_state() {
-    echo "DEBUG: backup_current_state called" >&2
     log_info "Backing up current configuration..."
 
     mkdir -p "${BACKUP_DIR}"
@@ -118,11 +97,9 @@ backup_current_state() {
 }
 
 pull_images() {
-    echo "DEBUG: pull_images called with IMAGE_TAG=${IMAGE_TAG}" >&2
     log_info "Pulling Docker images with tag: ${IMAGE_TAG}..."
 
     # Source environment variables for registry credentials
-    echo "DEBUG: About to load environment variables" >&2
     log_info "Loading environment variables..."
     set -a
     source "${ENV_FILE}" || {
@@ -308,7 +285,6 @@ show_deployment_summary() {
 }
 
 rollback() {
-    echo "DEBUG: !!!ROLLBACK TRIGGERED!!! Exit code: $? Line: ${BASH_LINENO[*]}" >&2
     log_error "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     log_error "DEPLOYMENT FAILED - INITIATING AUTOMATIC ROLLBACK"
     log_error "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -352,48 +328,22 @@ rollback() {
 # ─────────────────────────────────────────────────────────────────────────────
 
 main() {
-    echo "DEBUG: main() START" >&2
-    echo "DEBUG: IMAGE_TAG=${IMAGE_TAG}" >&2
-    echo "INFO: Starting Aether-Guard deployment (tag: ${IMAGE_TAG})..." >&2
+    log_info "Starting Aether-Guard deployment (tag: ${IMAGE_TAG})..."
 
     # Set trap for automatic rollback on error
-    echo "DEBUG: About to set ERR trap" >&2
     trap rollback ERR
-    echo "DEBUG: ERR trap set successfully" >&2
 
-    echo "DEBUG: About to call check_prerequisites" >&2
     check_prerequisites
-    echo "DEBUG: check_prerequisites returned successfully" >&2
-
-    echo "DEBUG: Calling backup_current_state" >&2
     backup_current_state
-    echo "DEBUG: backup_current_state completed successfully" >&2
-
-    echo "DEBUG: Calling pull_images" >&2
     pull_images
-    echo "DEBUG: pull_images completed successfully" >&2
-
-    echo "DEBUG: Calling perform_rolling_update" >&2
     perform_rolling_update
-    echo "DEBUG: perform_rolling_update completed successfully" >&2
-
-    echo "DEBUG: Calling verify_deployment" >&2
     verify_deployment
-    echo "DEBUG: verify_deployment completed successfully" >&2
-
-    echo "DEBUG: Calling cleanup_old_images" >&2
     cleanup_old_images
-    echo "DEBUG: cleanup_old_images completed successfully" >&2
-
-    echo "DEBUG: Calling show_deployment_summary" >&2
     show_deployment_summary
 
     # Disable rollback trap on success
-    echo "DEBUG: Disabling ERR trap - deployment succeeded!" >&2
     trap - ERR
 }
 
 # Execute main function
-echo "DEBUG: About to call main with args: $@" >&2
 main "$@"
-echo "DEBUG: main returned successfully!" >&2
