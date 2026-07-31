@@ -215,8 +215,9 @@ verify_deployment() {
     fi
 
     # Wait for all services to stabilize
-    log_info "Waiting 30s for services to stabilize..."
-    sleep 30
+    # Health checks run every 10-15s with 3 retries, so we need ~45-60s
+    log_info "Waiting 60s for services to stabilize and pass health checks..."
+    sleep 60
 
     # Check container status
     log_info "Container status:"
@@ -226,12 +227,24 @@ verify_deployment() {
     # This works regardless of port mappings
     log_info "Checking Docker health status..."
 
-    # Check if any containers are unhealthy or exited
-    # Note: grep returns 1 if no match found, so we need || true to avoid triggering error trap
-    if docker compose ${COMPOSE_FILES} ps | grep -qE "(unhealthy|Exited)" 2>/dev/null; then
-        log_error "❌ Unhealthy or stopped containers detected"
+    # Show detailed status for debugging
+    UNHEALTHY=$(docker compose ${COMPOSE_FILES} ps | grep -E "(unhealthy|Exited)" || true)
+
+    if [ -n "$UNHEALTHY" ]; then
+        log_error "❌ Unhealthy or stopped containers detected:"
+        echo "$UNHEALTHY"
+        log_error ""
         log_error "Full status:"
         docker compose ${COMPOSE_FILES} ps
+        log_error ""
+        log_error "Logs from unhealthy containers:"
+        # Show logs from unhealthy containers
+        echo "$UNHEALTHY" | awk '{print $1}' | while read -r container; do
+            if [ -n "$container" ]; then
+                log_error "━━━ Logs from $container ━━━"
+                docker compose ${COMPOSE_FILES} logs --tail=30 "$container" || true
+            fi
+        done
         return 1
     fi
 
