@@ -130,6 +130,9 @@ This repo ships its own Claude Code configuration under `.claude/`:
 - **Skills** (`.claude/skills/`): `verify` — verify a change end-to-end by driving a
   real incident through the detect → RCA → policy → remediation → verification pipeline
   and observing behavior, not just running unit tests.
+- **Status line** (`.claude/statusline.sh`, wired via `settings.json` `statusLine`):
+  shows `📁 dir · ⎇ branch(*dirty) · 🧠 model · +added/-removed`. Override it in your
+  personal `.claude/settings.local.json` if you prefer a different one.
 
 ## Docs worth reading
 
