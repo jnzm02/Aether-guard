@@ -459,3 +459,14 @@ cd infra && docker-compose -f docker-compose.test.yml up -d
 Every RCA pattern has been tested with real chaos injection and verified with actual log output, metrics, or container state. The critical Pattern 6 test confirmed real stdlib error messages, Pattern 4 was properly split into two variants (4a and 4b), and Pattern 1 was validated with actual OOM kill.
 
 **Phase A is now COMPLETE. Ready to proceed to Phase B.**
+
+## CI/CD Status
+
+Latest commits:
+- `44da625` - Test fix merged
+- `b71af44` - Fix handler tests for new signature (CI should pass)
+- `12fb008` - Phase A complete (initial CI failure)
+
+The deployment failure was caused by CI test failures which are now fixed.
+Next deployment should succeed.
+
