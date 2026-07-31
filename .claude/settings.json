@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make:*)",
+      "Bash(go build:*)",
+      "Bash(go test:*)",
+      "Bash(go vet:*)",
+      "Bash(go mod:*)",
+      "Bash(gofmt:*)",
+      "Bash(ruff check:*)",
+      "Bash(ruff format:*)",
+      "Bash(python3 -m pytest:*)",
+      "Bash(pytest:*)",
+      "Bash(docker compose config:*)",
+      "Bash(docker compose ps:*)",
+      "Bash(docker compose logs:*)",
+      "Bash(promtool check:*)",
+      "Bash(amtool check-config:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(curl -sf http://localhost:*)"
+    ],
+    "deny": [
+      "Read(.env)",
+      "Read(.env.production)",
+      "Read(./**/.env)"
+    ],
+    "ask": []
+  }
+}
