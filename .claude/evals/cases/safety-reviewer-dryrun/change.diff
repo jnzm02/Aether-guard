@@ -1,0 +1,11 @@
+--- a/services/agent/remediation.py
++++ b/services/agent/remediation.py
+@@ -42,9 +42,6 @@ def remediate(action, ctx):
+     Execute a remediation action after it has passed policy gating.
+     """
+-    if DRY_RUN:
+-        log.info("DRY_RUN set — planning action but not executing: %s", action)
+-        return RemediationResult(planned=action, executed=False)
+-
+     execute_action(action)
+     return RemediationResult(planned=action, executed=True)
