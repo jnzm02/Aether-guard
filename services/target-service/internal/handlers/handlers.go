@@ -4,6 +4,7 @@
 package handlers
 
 import (
+"context"
 "database/sql"
 "encoding/json"
 "net/http"
@@ -113,22 +114,56 @@ respondJSON(w, map[string]any{"orders": orders, "count": len(orders)})
 })
 }
 
-// HealthHandler is the Kubernetes liveness probe equivalent.
-// Returns 200 as long as the process is alive and the event loop is not blocked.
-func HealthHandler(logger *zap.Logger) http.Handler {
+// DependencyPinger is an interface for health-checkable dependencies.
+type DependencyPinger interface {
+Ping(ctx context.Context) error
+}
+
+// HealthHandler checks service health and optionally pings dependencies.
+// PRESERVED: Pattern 6 (Dependency Failure) requires this to log connection errors.
+func HealthHandler(pg, rdb DependencyPinger, logger *zap.Logger) http.Handler {
 return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-respondJSON(w, map[string]string{
-"status":  "ok",
-"service": "aether-guard/target-service",
-"version": "1.0.0",
+ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+defer cancel()
+
+status := "healthy"
+deps := map[string]string{}
+
+if pg != nil {
+if err := pg.Ping(ctx); err != nil {
+status = "unhealthy"
+deps["postgres"] = "down"
+} else {
+deps["postgres"] = "up"
+}
+}
+
+if rdb != nil {
+if err := rdb.Ping(ctx); err != nil {
+status = "unhealthy"
+deps["redis"] = "down"
+} else {
+deps["redis"] = "up"
+}
+}
+
+code := http.StatusOK
+if status == "unhealthy" {
+code = http.StatusServiceUnavailable
+}
+
+w.Header().Set("Content-Type", "application/json")
+w.WriteHeader(code)
+json.NewEncoder(w).Encode(map[string]any{
+"service":      "aether-guard/target-service",
+"status":       status,
+"version":      "1.2.0",
+"dependencies": deps,
 })
 })
 }
 
-// ReadyHandler is the Kubernetes readiness probe equivalent.
-// In a real service this would check DB connectivity, cache warm-up, etc.
-func ReadyHandler(logger *zap.Logger) http.Handler {
-return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-respondJSON(w, map[string]string{"status": "ready"})
-})
+// ReadyHandler is identical to HealthHandler for now.
+func ReadyHandler(pg, rdb DependencyPinger, logger *zap.Logger) http.Handler {
+return HealthHandler(pg, rdb, logger)
 }
