@@ -101,6 +101,22 @@ CD/deploy debugging — be careful editing `scripts/deploy.sh`).
 - Config is environment-driven (`PROMETHEUS_URL`, `TARGET_CONTAINER`,
   `CONFIDENCE_THRESHOLD`, `POLL_INTERVAL`, etc.) — see `.env.example`.
 
+## Claude Code harness
+
+This repo ships its own Claude Code configuration under `.claude/`:
+
+- **Subagents** (`.claude/agents/`): `safety-reviewer` (guards the 6-layer safety
+  pipeline), `test-runner` (runs per-service lint + tests like CI), `deploy-debugger`
+  (CD / `deploy.sh` / compose failures).
+- **Slash commands** (`.claude/commands/`):
+  - `/run-ci [all|go|python]` — run the CI checks locally for changed services.
+  - `/safety-check` — review the current diff for weakened safety layers.
+  - `/diagnose-cd [run-id|PR#]` — triage the latest failed CD/CI run.
+  - `/new-runbook <slug>` — scaffold a `docs/runbooks/` entry in the repo format.
+- **Hook** (`.claude/hooks/format-edited-file.sh`, wired via `settings.json`
+  `PostToolUse`): after any edit, `gofmt -w` Go files, and run `ruff check` on Python
+  files — surfacing lint issues immediately so they're fixed before CI rejects them.
+
 ## Docs worth reading
 
 - `README.md` — full architecture and the V2 6-layer pipeline.
