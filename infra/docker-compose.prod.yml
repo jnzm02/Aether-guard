@@ -127,6 +127,24 @@ services:
         max-file: "3"
     restart: always
 
+  event-tracker:
+    image: ${DOCKER_REGISTRY}/aether-guard/event-tracker:${IMAGE_TAG:-latest}
+    build: null  # Disable local build in production
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: always
+
   grafana:
     deploy:
       resources:
