@@ -53,18 +53,29 @@ cd services/target-service && go build ./... && go vet ./... && go test -race -c
 ```
 
 ### Python (`agent`, `listener`)
+
+**First time:** `make setup` creates a Python 3.11 virtualenv at `.venv` and installs
+all agent + listener deps and the CI-pinned ruff. Everything below (and the ruff hook
+and `test-runner` subagent) then works without depending on the ambient `python3`.
+
 ```bash
-# Lint (CI uses ruff 0.4.4):
+make setup        # one-time: build .venv (Python 3.11) + install deps
+make lint-py      # ruff-lint agent + listener + scripts (matches CI)
+make test-py      # run all Python unit tests (agent + listener) via .venv
+make test-agent   # agent suite only
+make test-listener
+```
+
+Under the hood these mirror CI (agent needs `PYTHONPATH=$PWD`; listener needs
+`--import-mode=importlib`). Manual equivalents if you've activated `.venv` yourself:
+```bash
 ruff check services/agent/ services/listener/ scripts/
-
-# Agent tests (set PYTHONPATH to the service dir):
-cd services/agent && PYTHONPATH=$PWD python3 -m pytest tests/ -v --tb=short
-
-# Listener tests (needs importlib import mode):
-cd services/listener && python3 -m pytest tests/ --import-mode=importlib -v
+cd services/agent && PYTHONPATH=$PWD python -m pytest tests/ -v --tb=short
+cd services/listener && python -m pytest tests/ --import-mode=importlib -v
 ```
 Python is **3.11**. Tests run with `ANTHROPIC_API_KEY` set to a placeholder and
-`DRY_RUN=true` — no real Claude calls or real remediation happen in tests.
+`DRY_RUN=true` — no real Claude calls or real remediation happen in tests. (Harmless
+`exporting traces to tempo:4317` warnings appear when no Tempo is running — ignore them.)
 
 ### Full stack
 ```bash
