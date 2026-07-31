@@ -1,0 +1,63 @@
+name: Nightly Mutation Testing
+
+# Runs mutmut against the agent's safety-critical modules to surface weak spots
+# in the test suite (mutants that survive = behavior no test pins down). Scope and
+# test command come from services/agent/pyproject.toml [tool.mutmut].
+#
+# Time-boxed and non-blocking: a surviving mutant is a signal to review, not a
+# reason to fail the build. Results are uploaded as an artifact and summarized.
+
+on:
+  schedule:
+    - cron: "0 6 * * *"   # 06:00 UTC daily
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  mutmut:
+    name: mutmut — services/agent
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # conftest.py force-sets these, but set them here too so mutmut's own
+      # process never blocks on missing config.
+      ANTHROPIC_API_KEY: test-ci-placeholder
+      DRY_RUN: "true"
+      CONFIDENCE_THRESHOLD: "0.75"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r services/agent/requirements.txt -r services/agent/requirements-dev.txt
+          pip install mutmut
+
+      - name: Run mutation tests (time-boxed)
+        working-directory: services/agent
+        run: |
+          # Don't fail the job on surviving mutants — this is a nightly signal.
+          timeout 35m mutmut run || true
+
+      - name: Summarize results
+        if: always()
+        working-directory: services/agent
+        run: |
+          {
+            echo '## Mutation testing results'
+            echo '```'
+            mutmut results 2>&1 || echo "(mutmut produced no results)"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY" > mutation-results.txt
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-results
+          path: services/agent/mutation-results.txt
