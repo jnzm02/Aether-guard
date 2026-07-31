@@ -5,7 +5,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY agent.py prompt.py remediation.py postmortem.py enrichment.py incident_report.py incident_storage.py metrics.py ./
+# Copy all Python source files
+COPY *.py ./
 
 # ANALYSIS_LOG_PATH writes here — mount a volume in production.
 RUN mkdir -p /app/data
