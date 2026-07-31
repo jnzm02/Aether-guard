@@ -59,7 +59,7 @@ func TestHealthHandler_Returns200(t *testing.T) {
 req := httptest.NewRequest(http.MethodGet, "/health", nil)
 rec := httptest.NewRecorder()
 
-HealthHandler(nop()).ServeHTTP(rec, req)
+HealthHandler(nil, nil, nop()).ServeHTTP(rec, req)
 
 if rec.Code != http.StatusOK {
 t.Errorf("status = %d, want 200", rec.Code)
@@ -70,14 +70,14 @@ func TestHealthHandler_ResponseBody(t *testing.T) {
 req := httptest.NewRequest(http.MethodGet, "/health", nil)
 rec := httptest.NewRecorder()
 
-HealthHandler(nop()).ServeHTTP(rec, req)
+HealthHandler(nil, nil, nop()).ServeHTTP(rec, req)
 
-var body map[string]string
+var body map[string]any
 if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 t.Fatalf("body decode error: %v", err)
 }
-if body["status"] != "ok" {
-t.Errorf("body.status = %q, want %q", body["status"], "ok")
+if body["status"] != "healthy" {
+t.Errorf("body.status = %q, want %q", body["status"], "healthy")
 }
 if body["service"] == "" {
 t.Error("expected non-empty body.service")
@@ -88,7 +88,7 @@ func TestHealthHandler_ContentType(t *testing.T) {
 req := httptest.NewRequest(http.MethodGet, "/health", nil)
 rec := httptest.NewRecorder()
 
-HealthHandler(nop()).ServeHTTP(rec, req)
+HealthHandler(nil, nil, nop()).ServeHTTP(rec, req)
 
 ct := rec.Header().Get("Content-Type")
 if ct != "application/json" {
@@ -104,7 +104,7 @@ func TestReadyHandler_Returns200(t *testing.T) {
 req := httptest.NewRequest(http.MethodGet, "/ready", nil)
 rec := httptest.NewRecorder()
 
-ReadyHandler(nop()).ServeHTTP(rec, req)
+ReadyHandler(nil, nil, nop()).ServeHTTP(rec, req)
 
 if rec.Code != http.StatusOK {
 t.Errorf("status = %d, want 200", rec.Code)
@@ -115,14 +115,14 @@ func TestReadyHandler_StatusIsReady(t *testing.T) {
 req := httptest.NewRequest(http.MethodGet, "/ready", nil)
 rec := httptest.NewRecorder()
 
-ReadyHandler(nop()).ServeHTTP(rec, req)
+ReadyHandler(nil, nil, nop()).ServeHTTP(rec, req)
 
-var body map[string]string
+var body map[string]any
 if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 t.Fatalf("body decode: %v", err)
 }
-if body["status"] != "ready" {
-t.Errorf("body.status = %q, want %q", body["status"], "ready")
+if body["status"] != "healthy" {
+t.Errorf("body.status = %q, want %q", body["status"], "healthy")
 }
 }
 
