@@ -60,17 +60,10 @@ services:
     container_name: prometheus
     ports:
       - "9090:9090"
-    environment:
-      # MONITORED_JOB: The job label for the service being monitored.
-      # This is substituted into slo_alerts.yml.template via envsubst at container startup.
-      # Default: target-service (matches the bundled demo service)
-      - MONITORED_JOB=${MONITORED_JOB:-target-service}
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./prometheus/rules:/etc/prometheus/rules  # Writable - entrypoint renders templates here
-      - ./prometheus/docker-entrypoint.sh:/docker-entrypoint.sh:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro  # Rules pre-rendered, can be read-only
       - prometheus_data:/prometheus
-    entrypoint: ["/docker-entrypoint.sh"]
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
