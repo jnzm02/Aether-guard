@@ -19,11 +19,6 @@ jobs:
   review:
     if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
-    # TEMPORARY: don't fail the PR while the ANTHROPIC_API_KEY repo secret is not yet
-    # a valid, funded key. Until then the review step errors (cost $0 / 0 turns) and
-    # this keeps it from showing a red check. Remove this line once the key works so
-    # real review failures surface again. See docs/CLAUDE_GITHUB_ACTION.md.
-    continue-on-error: true
     permissions:
       contents: read
       pull-requests: write
@@ -35,6 +30,13 @@ jobs:
           fetch-depth: 0
 
       - name: Claude review
+        # TEMPORARY: step-level continue-on-error so a failed review does not fail
+        # the job (and its "review" check). Needed at the STEP, not the job: job-level
+        # continue-on-error lets the workflow run pass but the job/check still shows
+        # failure. In place only while the ANTHROPIC_API_KEY secret is invalid/unfunded
+        # (review errors with cost $0 / 0 turns). Remove once the key works so real
+        # review failures surface. See docs/CLAUDE_GITHUB_ACTION.md.
+        continue-on-error: true
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
