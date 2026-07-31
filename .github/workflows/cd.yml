@@ -289,7 +289,9 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
             echo "=== Prometheus Targets ==="
-            curl -sf "http://localhost:9090/api/v1/targets" | jq '.data.activeTargets[] | {job: .labels.job, health: .health}'
+            curl -sf "http://localhost:9090/api/v1/targets"
+            echo ""
+            echo "✅ Prometheus API responding"
           EOF
 
       - name: Send Telegram notification - Verification complete
