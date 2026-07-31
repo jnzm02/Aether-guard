@@ -133,6 +133,10 @@ This repo ships its own Claude Code configuration under `.claude/`:
 - **Status line** (`.claude/statusline.sh`, wired via `settings.json` `statusLine`):
   shows `📁 dir · ⎇ branch(*dirty) · 🧠 model · +added/-removed`. Override it in your
   personal `.claude/settings.local.json` if you prefer a different one.
+- **Evals** (`.claude/evals/`): measure the agents before changing them —
+  `python3 .claude/evals/run.py` scores subagent behavior against fixed cases (currently
+  safety-reviewer regression/false-positive cases). Foundation for evolving the harness
+  safely; see `.claude/evals/README.md`.
 
 ## Docs worth reading
 
