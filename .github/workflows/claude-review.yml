@@ -1,0 +1,56 @@
+name: Claude PR Review
+
+# Automatic first-pass review on every non-draft PR. Posts a single review comment;
+# it does not approve or merge. Reuses this repo's harness: the safety-reviewer
+# subagent for agent changes, and knowledge of what CI enforces.
+#
+# Requires repository secret ANTHROPIC_API_KEY.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+concurrency:
+  # Supersede an in-flight review when new commits are pushed to the same PR.
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Claude review
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            You are reviewing a pull request for Aether-Guard, an autonomous AI SRE
+            agent that takes real remediation actions. Read the PR diff and give a
+            focused, high-signal review.
+
+            Priorities, in order:
+            1. Safety. For any change under services/agent/ that touches policy.py,
+               remediation.py, verification.py, DRY_RUN, confidence thresholds, or
+               approval/rollback logic, use the `safety-reviewer` subagent and treat
+               any weakening of the 6-layer defense pipeline as a blocking concern.
+            2. Correctness bugs that would cause wrong behavior at runtime.
+            3. CI: flag changes likely to fail the checks in .github/workflows/ci.yml
+               (ruff on agent/listener/scripts; go build/vet/test -race for
+               target-service; promtool/amtool config validation).
+
+            Rules:
+            - Report only real, high-confidence issues, each with file:line and a
+              concrete failure scenario. Rank most-severe first.
+            - If the PR looks good, say so briefly instead of inventing nits.
+            - Do NOT approve, merge, or push commits — just leave one review comment.
+          claude_args: '--max-turns 20'
