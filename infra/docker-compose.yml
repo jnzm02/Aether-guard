@@ -34,8 +34,10 @@ services:
   # ── The "Broken" Service ──────────────────────────────────────────────────
   target-service:
     build:
-      context: ../services/target-service
-      dockerfile: Dockerfile
+      # Repo root context so the sibling sdk/go module (referenced via a replace
+      # directive in go.mod) is available to the build.
+      context: ..
+      dockerfile: services/target-service/Dockerfile
     image: aether-guard/target-service:latest
     container_name: target-service
     ports:
