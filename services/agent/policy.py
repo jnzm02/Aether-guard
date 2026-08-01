@@ -41,6 +41,7 @@ class RootCauseCategory(Enum):
     BAD_DEPLOYMENT = "bad_deployment"
     TRAFFIC_SPIKE = "traffic_spike"
     GOROUTINE_LEAK = "goroutine_leak"
+    DISK_PRESSURE = "disk_pressure"
     UNKNOWN = "unknown"
 
 
@@ -92,6 +93,13 @@ class PolicyEngine:
         ("warning", RootCauseCategory.GOROUTINE_LEAK, ActionType.RESTART): (True, RiskLevel.LOW),
         ("critical", RootCauseCategory.GOROUTINE_LEAK, ActionType.RESTART): (True, RiskLevel.MEDIUM),
         ("warning", RootCauseCategory.GOROUTINE_LEAK, ActionType.SCALE): (False, None),  # Forbidden
+
+        # Disk pressure → SCALE (add capacity/volume); RESTART won't reclaim space.
+        # NOTE: this policy entry is a DELIBERATE, separately-reviewed decision — adding
+        # the RCA rule alone does NOT grant remediation. Without an entry here the
+        # deny-by-default policy would block the action even though the rule classifies it.
+        ("warning", RootCauseCategory.DISK_PRESSURE, ActionType.SCALE): (True, RiskLevel.MEDIUM),
+        ("critical", RootCauseCategory.DISK_PRESSURE, ActionType.SCALE): (True, RiskLevel.HIGH),
 
         # Unknown causes → very conservative (IGNORE only by default)
         ("warning", RootCauseCategory.UNKNOWN, ActionType.IGNORE): (True, RiskLevel.LOW),
