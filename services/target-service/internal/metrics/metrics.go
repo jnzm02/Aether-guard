@@ -151,6 +151,161 @@ var (
 			Help:      "Number of goroutines currently burning CPU via the chaos/cpu endpoint.",
 		},
 	)
+
+	// ── Phase B: RED metrics (missing in-flight gauge) ──────────────────────────
+
+	// HTTPRequestsInFlight tracks concurrent requests being processed.
+	HTTPRequestsInFlight = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "aether_guard",
+			Subsystem: "http",
+			Name:      "requests_in_flight",
+			Help:      "Number of HTTP requests currently being processed.",
+		},
+		[]string{"endpoint"},
+	)
+
+	// ── Phase B: Resource metrics ────────────────────────────────────────────────
+
+	// ProcessOpenFDs tracks the number of open file descriptors.
+	ProcessOpenFDs = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "aether_guard",
+			Subsystem: "process",
+			Name:      "open_fds",
+			Help:      "Number of open file descriptors.",
+		},
+	)
+
+	// DBConnectionsActive tracks active database connections.
+	DBConnectionsActive = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "aether_guard",
+			Subsystem: "db",
+			Name:      "connections_active",
+			Help:      "Number of active database connections in use.",
+		},
+	)
+
+	// DBConnectionsIdle tracks idle database connections.
+	DBConnectionsIdle = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "aether_guard",
+			Subsystem: "db",
+			Name:      "connections_idle",
+			Help:      "Number of idle database connections in the pool.",
+		},
+	)
+
+	// DBConnectionsMax tracks maximum allowed database connections.
+	DBConnectionsMax = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "aether_guard",
+			Subsystem: "db",
+			Name:      "connections_max",
+			Help:      "Maximum number of database connections allowed.",
+		},
+	)
+
+	// CacheHitRate tracks the cache hit rate as a ratio (0.0 to 1.0).
+	CacheHitRate = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "aether_guard",
+			Subsystem: "cache",
+			Name:      "hit_rate",
+			Help:      "Cache hit rate ratio (hits / (hits + misses)) per cache type.",
+		},
+		[]string{"cache_type"},
+	)
+
+	// CacheEvictionsTotal counts cache evictions.
+	CacheEvictionsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "aether_guard",
+			Subsystem: "cache",
+			Name:      "evictions_total",
+			Help:      "Total number of cache evictions.",
+		},
+		[]string{"cache_type", "reason"},
+	)
+
+	// ── Phase B: Business metrics ────────────────────────────────────────────────
+
+	// OrdersTotal counts orders by status.
+	OrdersTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "aether_guard",
+			Subsystem: "business",
+			Name:      "orders_total",
+			Help:      "Total number of orders processed, partitioned by status.",
+		},
+		[]string{"status"},
+	)
+
+	// PaymentProcessingDuration tracks payment processing latency.
+	PaymentProcessingDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "aether_guard",
+			Subsystem: "business",
+			Name:      "payment_processing_duration_seconds",
+			Help:      "Payment processing latency distribution.",
+			Buckets:   []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0},
+		},
+	)
+
+	// InventoryChecksTotal counts inventory check results.
+	InventoryChecksTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "aether_guard",
+			Subsystem: "business",
+			Name:      "inventory_checks_total",
+			Help:      "Total inventory checks performed, partitioned by result.",
+		},
+		[]string{"result"},
+	)
+
+	// BackgroundJobsQueueLength tracks the depth of background job queues.
+	BackgroundJobsQueueLength = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "aether_guard",
+			Subsystem: "business",
+			Name:      "background_jobs_queue_length",
+			Help:      "Number of jobs waiting in background queues.",
+		},
+		[]string{"queue_name"},
+	)
+
+	// ── Phase B: Error tracking ──────────────────────────────────────────────────
+
+	// ErrorsTotal counts application errors by type and endpoint.
+	ErrorsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "aether_guard",
+			Name:      "errors_total",
+			Help:      "Total application errors, partitioned by type and endpoint.",
+		},
+		[]string{"type", "endpoint"},
+	)
+
+	// CircuitBreakerState tracks circuit breaker state (0=closed, 1=half_open, 2=open).
+	CircuitBreakerState = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "aether_guard",
+			Name:      "circuit_breaker_state",
+			Help:      "Circuit breaker state: 0=closed, 1=half_open, 2=open.",
+		},
+		[]string{"service"},
+	)
+
+	// TimeoutErrorsTotal counts timeout errors by upstream service.
+	TimeoutErrorsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "aether_guard",
+			Name:      "timeout_errors_total",
+			Help:      "Total timeout errors when calling upstream services.",
+		},
+		[]string{"upstream"},
+	)
 )
 
 // statusRecorder wraps http.ResponseWriter to capture the status code written
@@ -169,6 +324,10 @@ func (r *statusRecorder) WriteHeader(code int) {
 // for every request that passes through it.
 func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Track in-flight requests (Phase B: RED metrics)
+		HTTPRequestsInFlight.WithLabelValues(r.URL.Path).Inc()
+		defer HTTPRequestsInFlight.WithLabelValues(r.URL.Path).Dec()
+
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
 
@@ -179,6 +338,13 @@ func Middleware(next http.Handler) http.Handler {
 
 		HTTPRequestsTotal.WithLabelValues(r.Method, r.URL.Path, statusCode).Inc()
 		HTTPRequestDuration.WithLabelValues(r.Method, r.URL.Path).Observe(duration)
+
+		// Track errors (Phase B: Error tracking)
+		if rec.statusCode >= 500 {
+			ErrorsTotal.WithLabelValues("server_error", r.URL.Path).Inc()
+		} else if rec.statusCode >= 400 {
+			ErrorsTotal.WithLabelValues("client_error", r.URL.Path).Inc()
+		}
 	})
 }
 
@@ -204,9 +370,27 @@ func StartRuntimeCollector(stop <-chan struct{}) {
 					lastPauseNs := ms.PauseNs[(ms.NumGC+255)%256]
 					RuntimeGCPauseMicros.Observe(float64(lastPauseNs) / 1_000)
 				}
+
+				// Phase B: Process metrics (file descriptors)
+				updateProcessMetrics()
 			case <-stop:
 				return
 			}
 		}
 	}()
+}
+
+// UpdateDBPoolMetrics updates database connection pool metrics.
+// Call this periodically with stats from sql.DB.Stats().
+func UpdateDBPoolMetrics(stats struct {
+	OpenConnections int
+	InUse           int
+	Idle            int
+	MaxOpen         int
+}) {
+	DBConnectionsActive.Set(float64(stats.InUse))
+	DBConnectionsIdle.Set(float64(stats.Idle))
+	if stats.MaxOpen > 0 {
+		DBConnectionsMax.Set(float64(stats.MaxOpen))
+	}
 }

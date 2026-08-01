@@ -7,6 +7,7 @@ import (
 "context"
 "database/sql"
 "encoding/json"
+"math/rand"
 "net/http"
 "time"
 
@@ -69,6 +70,7 @@ zap.String("remote_addr", r.RemoteAddr),
 
 // OrdersHandler queries SQLite for all orders (with user name via JOIN) and
 // returns them as JSON. Uses a JOIN so latency is realistic.
+// Phase B: Emits business metrics (orders_total, inventory_checks, payment_processing).
 func OrdersHandler(logger *zap.Logger, db *sql.DB) http.Handler {
 type Order struct {
 ID       int     `json:"id"`
@@ -102,6 +104,32 @@ logger.Warn("row scan error", zap.Error(err))
 continue
 }
 orders = append(orders, o)
+
+// Phase B: Track orders by status
+metrics.OrdersTotal.WithLabelValues(o.Status).Inc()
+
+// Phase B: Simulate inventory check (80% success rate)
+inventoryCheckStart := time.Now()
+time.Sleep(time.Duration(rand.Intn(10)) * time.Millisecond)
+if rand.Float64() < 0.8 {
+metrics.InventoryChecksTotal.WithLabelValues("success").Inc()
+} else {
+metrics.InventoryChecksTotal.WithLabelValues("failure").Inc()
+}
+
+// Phase B: Simulate payment processing for non-delivered orders
+if o.Status == "processing" || o.Status == "pending" {
+paymentStart := time.Now()
+time.Sleep(time.Duration(50+rand.Intn(200)) * time.Millisecond)
+metrics.PaymentProcessingDuration.Observe(time.Since(paymentStart).Seconds())
+}
+
+logger.Debug("order processed",
+zap.Int("order_id", o.ID),
+zap.String("status", o.Status),
+zap.Float64("total", o.Total),
+zap.Duration("inventory_check_duration", time.Since(inventoryCheckStart)),
+)
 }
 if err := rows.Err(); err != nil {
 logger.Error("rows iteration error", zap.Error(err))

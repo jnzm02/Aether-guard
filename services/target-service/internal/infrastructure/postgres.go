@@ -1,20 +1,27 @@
 // Package infrastructure provides minimal health-check-only connections to
 // external dependencies for Pattern 6 (Dependency Failure) validation.
+// Phase B: Adds circuit breaker and timeout tracking.
 package infrastructure
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
+	"github.com/aether-guard/target-service/internal/circuitbreaker"
+	"github.com/aether-guard/target-service/internal/metrics"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
 
 // PostgresHealth provides a minimal Postgres connection for health checking only.
 // NO queries, NO repositories, just connection + ping for Pattern 6 validation.
+// Phase B: Includes circuit breaker.
 type PostgresHealth struct {
-	pool   *pgxpool.Pool
-	logger *zap.Logger
+	pool           *pgxpool.Pool
+	logger         *zap.Logger
+	circuitBreaker *circuitbreaker.CircuitBreaker
 }
 
 func NewPostgresHealth(ctx context.Context, url string, logger *zap.Logger) (*PostgresHealth, error) {
@@ -33,16 +40,38 @@ func NewPostgresHealth(ctx context.Context, url string, logger *zap.Logger) (*Po
 		return nil, fmt.Errorf("postgres ping failed: %w", err)
 	}
 
-	return &PostgresHealth{pool: pool, logger: logger}, nil
+	// Phase B: Create circuit breaker (5 failures, 30 second reset)
+	cb := circuitbreaker.New("postgres", 5, 30*time.Second)
+
+	return &PostgresHealth{
+		pool:           pool,
+		logger:         logger,
+		circuitBreaker: cb,
+	}, nil
 }
 
 func (p *PostgresHealth) Ping(ctx context.Context) error {
-	if err := p.pool.Ping(ctx); err != nil {
-		// Pattern 6 validation: these errors contain "connection refused", "timeout", etc.
-		p.logger.Error("postgres health check failed", zap.Error(err))
-		return err
-	}
-	return nil
+	// Phase B: Use circuit breaker
+	return p.circuitBreaker.Call(ctx, func(ctx context.Context) error {
+		if err := p.pool.Ping(ctx); err != nil {
+			// Pattern 6 validation: these errors contain "connection refused", "timeout", etc.
+			p.logger.Error("postgres health check failed", zap.Error(err))
+
+			// Phase B: Track timeout errors
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+				metrics.TimeoutErrorsTotal.WithLabelValues("postgres").Inc()
+			}
+
+			return err
+		}
+		return nil
+	})
+}
+
+// GetPool returns the underlying connection pool for metrics collection.
+// Phase B: Exposes pool stats for db_connections_* metrics.
+func (p *PostgresHealth) GetPool() *pgxpool.Pool {
+	return p.pool
 }
 
 func (p *PostgresHealth) Close() {
