@@ -1,0 +1,13 @@
+# Root build context (used by services/target-service/Dockerfile, which needs the
+# sibling sdk/go module). Keep the context lean — exclude heavy, irrelevant paths.
+.git
+.github
+.claude
+.venv
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/*.pyc
+node_modules
+postmortems
+docs

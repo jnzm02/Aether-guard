@@ -10,7 +10,10 @@ networks:
 
 services:
   target-service:
-    build: ../services/target-service
+    build:
+      # Repo root context so the sibling sdk/go module (go.mod replace) is in scope.
+      context: ..
+      dockerfile: services/target-service/Dockerfile
     ports:
       - "8080:8080"
     environment:

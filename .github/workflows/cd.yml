@@ -56,7 +56,10 @@ jobs:
       - name: Build & Push target-service
         uses: docker/build-push-action@v5
         with:
-          context: ./services/target-service
+          # Repo root context + explicit Dockerfile: target-service's go.mod has a
+          # replace pointing at the sibling sdk/go module, which must be in context.
+          context: .
+          file: services/target-service/Dockerfile
           push: true
           tags: |
             ${{ secrets.DOCKER_REGISTRY }}/aether-guard/target-service:${{ github.sha }}

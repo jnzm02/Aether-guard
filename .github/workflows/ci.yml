@@ -141,7 +141,7 @@ jobs:
       - uses: docker/setup-buildx-action@v3
 
       - name: Build target-service
-        run: docker build -t aether-guard/target-service:ci services/target-service
+        run: docker build -f services/target-service/Dockerfile -t aether-guard/target-service:ci .
 
       - name: Build listener
         run: docker build -t aether-guard/listener:ci services/listener
