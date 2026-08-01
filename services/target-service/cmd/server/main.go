@@ -21,6 +21,8 @@ import (
 	"github.com/aether-guard/target-service/internal/infrastructure"
 	"github.com/aether-guard/target-service/internal/jobs"
 	"github.com/aether-guard/target-service/internal/metrics"
+	contract "github.com/jnzm02/aether-guard/sdk/go"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 )
@@ -31,6 +33,12 @@ func main() {
 		panic(err)
 	}
 	defer logger.Sync() //nolint:errcheck
+
+	// ── Service Contract SDK initialization ──────────────────────────────────
+	contractMetrics := contract.New(prometheus.DefaultRegisterer, "target-service", "1.2.0")
+	contractMetrics.SetServiceInfo("target-service", "1.2.0", "aether-guard", "", "L1")
+	metrics.InitContract(contractMetrics)
+	logger.Info("✅ Service Contract SDK initialized")
 
 	// ── SQLite database (existing behavior) ──────────────────────────────────
 	database, err := db.New()
@@ -102,6 +110,11 @@ func main() {
 	// NEW: Goroutine leak endpoint (Pattern 8)
 	mux.Handle("/chaos/goroutine-leak", metrics.Middleware(chaos.GoroutineLeakHandler(logger)))
 
+	// NEW: DB pool pressure endpoint (for testing pool metrics under load)
+	if pg != nil {
+		mux.Handle("/chaos/db-pool-pressure", metrics.Middleware(chaos.DBPoolPressureHandler(pg, logger)))
+	}
+
 	// PRESERVED: Observability
 	mux.Handle("/metrics", promhttp.Handler())
 
@@ -115,6 +128,7 @@ func main() {
 	}
 	mux.Handle("/health", handlers.HealthHandler(pgPinger, rdbPinger, logger))
 	mux.Handle("/ready", handlers.ReadyHandler(pgPinger, rdbPinger, logger))
+	mux.Handle("/aetherguard/v1/manifest", handlers.ManifestHandler())
 
 	// ── Background runtime metrics collector ─────────────────────────────────
 	stopChan := make(chan struct{})

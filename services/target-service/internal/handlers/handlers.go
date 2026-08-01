@@ -195,3 +195,20 @@ json.NewEncoder(w).Encode(map[string]any{
 func ReadyHandler(pg, rdb DependencyPinger, logger *zap.Logger) http.Handler {
 return HealthHandler(pg, rdb, logger)
 }
+
+// ManifestHandler returns Service Contract v1.0 manifest per §4.
+// L1 compliance: declares observability capabilities, no actions.
+func ManifestHandler() http.Handler {
+return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+w.Header().Set("Content-Type", "application/json")
+json.NewEncoder(w).Encode(map[string]any{
+"service":          "target-service",
+"version":          "1.2.0",
+"contract_version": "1.0",
+"compliance_level": "L1",
+"owner":            "aether-guard",
+"runbook":          "",
+"actions":          []string{},
+})
+})
+}

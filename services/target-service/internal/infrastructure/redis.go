@@ -51,9 +51,11 @@ func (r *RedisHealth) Ping(ctx context.Context) error {
 			// Pattern 6 validation: stdlib error messages appear here
 			r.logger.Error("redis health check failed", zap.Error(err))
 
-			// Phase B: Track timeout errors
+			// Phase B: Track timeout errors via Service Contract SDK
 			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-				metrics.TimeoutErrorsTotal.WithLabelValues("redis").Inc()
+				if metrics.ContractMetrics != nil {
+					metrics.ContractMetrics.RecordTimeoutError("redis")
+				}
 			}
 
 			return err

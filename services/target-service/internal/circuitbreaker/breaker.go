@@ -114,7 +114,10 @@ func (cb *CircuitBreaker) afterCall(err error) {
 }
 
 func (cb *CircuitBreaker) updateMetric() {
-	metrics.CircuitBreakerState.WithLabelValues(cb.name).Set(float64(cb.state))
+	// Service Contract SDK with correct labels: {service, dependency}
+	if metrics.ContractMetrics != nil {
+		metrics.ContractMetrics.SetCircuitBreakerState("target-service", cb.name, int(cb.state))
+	}
 }
 
 // GetState returns the current state.

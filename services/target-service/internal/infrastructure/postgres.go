@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/aether-guard/target-service/internal/circuitbreaker"
@@ -25,7 +27,26 @@ type PostgresHealth struct {
 }
 
 func NewPostgresHealth(ctx context.Context, url string, logger *zap.Logger) (*PostgresHealth, error) {
-	pool, err := pgxpool.New(ctx, url)
+	// Service Contract requirement: explicit pool configuration for stable saturation_ratio denominator
+	// Default: 15 connections (reasonable for a demo service under moderate load)
+	// Justification: Small enough to avoid resource waste, large enough to handle concurrent health checks + chaos endpoints
+	maxConns := 15
+	if envMax := os.Getenv("POSTGRES_POOL_MAX_CONNS"); envMax != "" {
+		if parsed, err := strconv.Atoi(envMax); err == nil && parsed > 0 {
+			maxConns = parsed
+		}
+	}
+
+	config, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		logger.Error("postgres config parse failed", zap.Error(err))
+		return nil, fmt.Errorf("postgres config parse failed: %w", err)
+	}
+
+	// Set explicit MaxConns for Service Contract compliance
+	config.MaxConns = int32(maxConns)
+
+	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		// Pattern 6 validation: This error will contain stdlib messages like:
 		// "failed to connect to `host=localhost`: dial tcp 127.0.0.1:5432: connect: connection refused"
@@ -57,9 +78,11 @@ func (p *PostgresHealth) Ping(ctx context.Context) error {
 			// Pattern 6 validation: these errors contain "connection refused", "timeout", etc.
 			p.logger.Error("postgres health check failed", zap.Error(err))
 
-			// Phase B: Track timeout errors
+			// Phase B: Track timeout errors via Service Contract SDK
 			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-				metrics.TimeoutErrorsTotal.WithLabelValues("postgres").Inc()
+				if metrics.ContractMetrics != nil {
+					metrics.ContractMetrics.RecordTimeoutError("postgres")
+				}
 			}
 
 			return err

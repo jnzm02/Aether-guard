@@ -177,35 +177,8 @@ var (
 		},
 	)
 
-	// DBConnectionsActive tracks active database connections.
-	DBConnectionsActive = promauto.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "aether_guard",
-			Subsystem: "db",
-			Name:      "connections_active",
-			Help:      "Number of active database connections in use.",
-		},
-	)
-
-	// DBConnectionsIdle tracks idle database connections.
-	DBConnectionsIdle = promauto.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "aether_guard",
-			Subsystem: "db",
-			Name:      "connections_idle",
-			Help:      "Number of idle database connections in the pool.",
-		},
-	)
-
-	// DBConnectionsMax tracks maximum allowed database connections.
-	DBConnectionsMax = promauto.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "aether_guard",
-			Subsystem: "db",
-			Name:      "connections_max",
-			Help:      "Maximum number of database connections allowed.",
-		},
-	)
+	// NOTE: Database connection metrics migrated to SDK (db_connections_max, db_connections_in_use, db_connections_idle).
+	// Updated via ContractMetrics.UpdateDBPoolMetrics() in UpdateDBPoolMetrics().
 
 	// CacheHitRate tracks the cache hit rate as a ratio (0.0 to 1.0).
 	CacheHitRate = promauto.NewGaugeVec(
@@ -277,35 +250,9 @@ var (
 
 	// ── Phase B: Error tracking ──────────────────────────────────────────────────
 
-	// ErrorsTotal counts application errors by type and endpoint.
-	ErrorsTotal = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "aether_guard",
-			Name:      "errors_total",
-			Help:      "Total application errors, partitioned by type and endpoint.",
-		},
-		[]string{"type", "endpoint"},
-	)
-
-	// CircuitBreakerState tracks circuit breaker state (0=closed, 1=half_open, 2=open).
-	CircuitBreakerState = promauto.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "aether_guard",
-			Name:      "circuit_breaker_state",
-			Help:      "Circuit breaker state: 0=closed, 1=half_open, 2=open.",
-		},
-		[]string{"service"},
-	)
-
-	// TimeoutErrorsTotal counts timeout errors by upstream service.
-	TimeoutErrorsTotal = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "aether_guard",
-			Name:      "timeout_errors_total",
-			Help:      "Total timeout errors when calling upstream services.",
-		},
-		[]string{"upstream"},
-	)
+	// NOTE: Service Contract metrics (errors_total, circuit_breaker_state, timeout_errors_total,
+	// db_connections_*) have been migrated to the SDK in internal/metrics/contract.go.
+	// Use ContractMetrics.RecordError(), SetCircuitBreakerState(), etc. instead.
 )
 
 // statusRecorder wraps http.ResponseWriter to capture the status code written
@@ -339,11 +286,13 @@ func Middleware(next http.Handler) http.Handler {
 		HTTPRequestsTotal.WithLabelValues(r.Method, r.URL.Path, statusCode).Inc()
 		HTTPRequestDuration.WithLabelValues(r.Method, r.URL.Path).Observe(duration)
 
-		// Track errors (Phase B: Error tracking)
-		if rec.statusCode >= 500 {
-			ErrorsTotal.WithLabelValues("server_error", r.URL.Path).Inc()
-		} else if rec.statusCode >= 400 {
-			ErrorsTotal.WithLabelValues("client_error", r.URL.Path).Inc()
+		// Track errors via Service Contract SDK (Phase B: Error tracking)
+		if ContractMetrics != nil {
+			if rec.statusCode >= 500 {
+				ContractMetrics.RecordError("target-service", "internal", r.URL.Path, statusCode, "HTTPError")
+			} else if rec.statusCode >= 400 {
+				ContractMetrics.RecordError("target-service", "validation", r.URL.Path, statusCode, "HTTPError")
+			}
 		}
 	})
 }
@@ -388,9 +337,8 @@ func UpdateDBPoolMetrics(stats struct {
 	Idle            int
 	MaxOpen         int
 }) {
-	DBConnectionsActive.Set(float64(stats.InUse))
-	DBConnectionsIdle.Set(float64(stats.Idle))
-	if stats.MaxOpen > 0 {
-		DBConnectionsMax.Set(float64(stats.MaxOpen))
+	// Service Contract metrics via SDK
+	if ContractMetrics != nil {
+		ContractMetrics.UpdateDBPoolMetrics("target-service", stats.MaxOpen, stats.InUse, stats.Idle)
 	}
 }
