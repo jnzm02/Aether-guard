@@ -109,6 +109,12 @@ CD/deploy debugging — be careful editing `scripts/deploy.sh`).
   template. Never commit `ANTHROPIC_API_KEY` or other credentials.
 - **Commit style**: conventional commits (`fix(cd):`, `debug(deploy):`, `feat:` …),
   matching existing history. Branch off `main` for PRs.
+- **Keep PR branches current**: `main` moves fast, so before trusting a PR's CI —
+  and always before merging — merge (or rebase) the latest `main` into the branch
+  (`git merge origin/main`). A branch cut from an earlier `main` can inherit a
+  transient breakage that was already fixed on `main` (e.g. a Go build/vet or
+  integration-smoke failure), which then shows up as a red check on your unrelated PR.
+  If a PR fails CI in an area it didn't touch, sync with `main` first before debugging.
 - Config is environment-driven (`PROMETHEUS_URL`, `TARGET_CONTAINER`,
   `CONFIDENCE_THRESHOLD`, `POLL_INTERVAL`, etc.) — see `.env.example`.
 
