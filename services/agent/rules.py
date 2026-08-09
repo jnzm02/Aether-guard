@@ -75,6 +75,40 @@ class RuleMatch:
     reasoning: str  # Human-readable explanation
 
 
+def _normalize_metrics(raw_metrics: dict) -> dict:
+    """
+    Translate enrichment.py's actual metric names to the logical names
+    expected by rule patterns.
+
+    enrichment.py emits e.g. ``error_ratio_5m`` / ``latency_p99_5m_seconds`` /
+    ``request_rate_5m_rps``; rule patterns read ``error_rate_5m`` /
+    ``latency_p99_5m`` / ``request_rate_5m``. This bridges the two.
+
+    Backward-compatible and idempotent: callers that already supply the logical
+    names directly (unit tests, already-normalized replay records) pass through
+    unchanged. A mapping is applied only when the enrichment source key is
+    present, and it never overwrites an existing logical value — so normalizing
+    twice, or normalizing already-logical input, is a no-op rather than a
+    silent None-out.
+    """
+    # Enrichment source name -> logical name the rules read.
+    _ALIASES = {
+        "error_ratio_5m": "error_rate_5m",
+        "latency_p99_5m_seconds": "latency_p99_5m",
+        "request_rate_5m_rps": "request_rate_5m",
+    }
+
+    # Passthrough everything first (preserves logical names supplied directly).
+    result = dict(raw_metrics)
+
+    # Apply each alias only when the source is present and the logical target
+    # isn't already populated with a real value.
+    for src, dst in _ALIASES.items():
+        if src in raw_metrics and result.get(dst) is None:
+            result[dst] = raw_metrics[src]
+    return result
+
+
 class RuleEngine:
     """
     Deterministic pattern matcher for known incident types.
@@ -108,6 +142,9 @@ class RuleEngine:
         2. Medium-confidence rules (heuristics) — confidence 0.70-0.89
         3. If nothing matches → return None (escalate to LLM)
         """
+        # Normalize enrichment's metric names to logical names ONCE before all patterns
+        metrics = _normalize_metrics(metrics)
+
         alert_name = alert.get("labels", {}).get("alertname", "")
 
         # ── High-confidence rules (exact patterns, all synchronous) ──────────────
@@ -809,7 +846,9 @@ class RuleEngine:
             signals.append(f"{len(goroutine_warnings)} goroutine-related warnings in logs")
 
         # Confidence booster 3: No recent traffic spike (rules out load-driven explanation)
-        request_rate = metrics.get("request_rate_5m_rps", 0.0)
+        # Read the logical name produced by _normalize_metrics() (consistent with
+        # every other pattern), not enrichment's raw request_rate_5m_rps.
+        request_rate = metrics.get("request_rate_5m", 0.0)
         is_traffic_spike = request_rate and request_rate > 1000  # Reuse threshold from traffic spike rule
         if not is_traffic_spike:
             confidence += 0.05

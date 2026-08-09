@@ -74,7 +74,7 @@ def _compose_alert_text_for_embedding(alert: dict) -> str:
     summary = alert.get("annotations", {}).get("summary", "")
 
     # Include available metrics
-    metrics = alert.get("prometheus_snapshot", {})
+    metrics = alert.get("metrics_snapshot", {})
     metrics_str = ", ".join(f"{k}={v}" for k, v in list(metrics.items())[:5])
 
     return f"""Alert: {alertname}
