@@ -32,6 +32,38 @@ Rule confidence is based on:
 #   Trigger: Pool utilization >85% AND rising/elevated checkout duration
 #   Confidence: 0.70 + boosters (slow queries, connection timeouts in logs)
 #   Action: RESTART (clears stale connections) or SCALE (if load-driven)
+#
+# ── Backlog: Chaos-vs-rule testability gaps (found live-verifying Finding 1a) ──
+# These block end-to-end live proof of the trend-gated patterns on the exact
+# scenarios that motivate them. Neither is a rule-logic bug; both are tooling.
+#
+# TODO: Chaos memleak cap (500MB/call) is below MEMORY_LEAK Gate 1 (>=1GB).
+#   services/target-service/internal/chaos/memory.go caps mb at 1..500, but
+#   _check_memory_leak's STATIC_THRESHOLD is 1_000_000_000. A single injection
+#   can never trip the rule; you must stack >=3 calls (leak is cumulative) AND
+#   produce a rising heap trend. Fix: raise the chaos cap, or document that
+#   multiple calls are required. (Out of scope for the Finding 1a key fix.)
+#
+# TODO: /chaos/reset does not clear leaked goroutines (only a restart does).
+#   services/target-service/internal/chaos/reset.go frees memory + stops the CPU
+#   spike but leaves leaked goroutines running (recover-by-restart, by design).
+#   Consequence: residual goroutines make GOROUTINE_LEAK (0.90) pre-empt
+#   memory_leak / cpu_efficiency in analyze() priority order on later alerts, so
+#   single-pattern live testing needs `docker compose restart target-service`
+#   between scenarios. Fix: add an endpoint that can stop leaked goroutines, or
+#   document the restart requirement in the verify skill.
+#
+# TODO: _normalize_metrics() does no type validation (adversarial review).
+#   It is the seam between untyped enrichment JSON and numeric rule logic, but
+#   passes values through unchanged. A string-typed value (e.g. a JSON round-trip
+#   or Prometheus-client regression emitting "0.9" instead of 0.9) makes a rule's
+#   numeric comparison raise TypeError; analyze() is wrapped in a broad
+#   except->fall-back-to-LLM (agent.py), so it fails closed (no wrong
+#   remediation) but SILENTLY disables the whole fast-rule path for that
+#   incident, logged only as a generic "rule engine failed" — indistinguishable
+#   from a real outage. Not reachable today (enrichment only emits floats).
+#   Fix: coerce/validate numeric types inside _normalize_metrics and emit a
+#   specific warning on a malformed value so the failure is visible/attributable.
 """
 
 import logging
