@@ -375,8 +375,8 @@ async def analyze_alert(alert: dict) -> dict[str, Any]:
         if V2_ENABLED and _rule_engine:
             try:
                 with tracer.start_as_current_span("rule_engine_check") as rule_span:
-                    metrics = alert.get("prometheus_snapshot", {})
-                    logs = alert.get("logs", [])
+                    metrics = alert.get("metrics_snapshot", {})
+                    logs = alert.get("log_tail", [])
 
                     rule_match = await _rule_engine.analyze(alert, metrics, logs)
 

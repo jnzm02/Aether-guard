@@ -124,6 +124,10 @@ def _build_key_metrics():
             "runtime_heap_inuse_bytes",
             f'go_memstats_heap_inuse_bytes{{job="{MONITORED_JOB}"}}',
         ),
+        (
+            "cpu_usage_percent",
+            f'rate(process_cpu_seconds_total{{job="{MONITORED_JOB}"}}[5m]) * 100',
+        ),
     ]
     return base_metrics
 
