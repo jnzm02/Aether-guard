@@ -170,6 +170,19 @@ jobs:
           scp -i ~/.ssh/deploy_key -r infra/grafana \
             ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/home/user/aether-guard/infra/
 
+          # Copy Caddyfile
+          echo "📋 Copying Caddyfile to server..."
+          scp -i ~/.ssh/deploy_key infra/Caddyfile \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/tmp/Caddyfile.new
+          echo "✅ Caddyfile copied"
+
+          # Copy website files
+          echo "📋 Copying website files to server..."
+          ssh -i ~/.ssh/deploy_key ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} 'sudo mkdir -p /var/www/aether-guard.com && sudo chown -R $USER:$USER /var/www/aether-guard.com'
+          scp -i ~/.ssh/deploy_key -r website/* \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:/var/www/aether-guard.com/
+          echo "✅ Website files copied"
+
           # Copy deployment script
           echo "📋 Copying deploy.sh to server..."
           scp -i ~/.ssh/deploy_key scripts/deploy.sh \
@@ -212,6 +225,14 @@ jobs:
             # Run deployment script
             chmod +x scripts/deploy.sh
             ./scripts/deploy.sh ${{ github.sha }}
+
+            # Update Caddyfile if changed
+            if [ -f /tmp/Caddyfile.new ]; then
+              echo "📋 Updating Caddyfile..."
+              sudo mv /tmp/Caddyfile.new /etc/caddy/Caddyfile
+              sudo caddy reload --config /etc/caddy/Caddyfile
+              echo "✅ Caddyfile updated and reloaded"
+            fi
           EOF
 
       - name: Health check

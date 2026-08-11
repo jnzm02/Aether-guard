@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aether-Guard — Autonomous AI SRE Agent</title>
+    <meta name="description" content="Autonomous AI SRE Agent with Production-Grade Safety. Hybrid RCA engine (rules + LLM), policy-based action gating, post-remediation verification, and automatic rollback.">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 2rem 1rem;
+        }
+        header {
+            background: #fff;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+        }
+        h1 { font-size: 2.5rem; margin-bottom: 0.5rem; color: #1a1a1a; }
+        .tagline { font-size: 1.2rem; color: #666; margin-bottom: 1.5rem; }
+        .badges { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1.5rem; }
+        .badges img { height: 20px; }
+        .cta { display: inline-block; padding: 0.75rem 1.5rem; background: #0066cc; color: #fff; text-decoration: none; border-radius: 4px; font-weight: 600; margin-right: 1rem; }
+        .cta:hover { background: #0052a3; }
+        .secondary { display: inline-block; padding: 0.75rem 1.5rem; background: #fff; color: #0066cc; text-decoration: none; border-radius: 4px; font-weight: 600; border: 2px solid #0066cc; }
+        .secondary:hover { background: #f0f0f0; }
+        section {
+            background: #fff;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+        }
+        h2 { font-size: 1.8rem; margin-bottom: 1rem; color: #1a1a1a; }
+        h3 { font-size: 1.3rem; margin-top: 1.5rem; margin-bottom: 0.75rem; color: #333; }
+        ul { margin-left: 1.5rem; margin-bottom: 1rem; }
+        li { margin-bottom: 0.5rem; }
+        code { background: #f4f4f4; padding: 0.2rem 0.4rem; border-radius: 3px; font-family: 'Courier New', monospace; }
+        .note {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 1rem;
+            margin: 1.5rem 0;
+            border-radius: 4px;
+        }
+        .note strong { color: #856404; }
+        table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+        th, td { padding: 0.75rem; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background: #f8f8f8; font-weight: 600; }
+        footer { text-align: center; padding: 2rem 1rem; color: #666; font-size: 0.9rem; }
+        a { color: #0066cc; }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🛡️ Aether-Guard V2</h1>
+            <p class="tagline">Autonomous AI SRE Agent with Production-Grade Safety</p>
+            <div class="badges">
+                <img src="https://github.com/jnzm02/Aether-guard/actions/workflows/ci.yml/badge.svg" alt="CI Status">
+                <img src="https://img.shields.io/badge/Go-1.25-00ADD8?logo=go" alt="Go 1.25">
+                <img src="https://img.shields.io/badge/Python-3.11-3776AB?logo=python" alt="Python 3.11">
+                <img src="https://img.shields.io/badge/Claude-Sonnet_4.5-8A2BE2" alt="Claude Sonnet 4.5">
+                <img src="https://img.shields.io/badge/Tests-280_Passing-brightgreen" alt="280 Tests Passing">
+            </div>
+            <a href="https://github.com/jnzm02/Aether-guard" class="cta">View on GitHub</a>
+            <a href="/docs" class="secondary">Documentation</a>
+        </header>
+
+        <section>
+            <h2>What is Aether-Guard?</h2>
+            <p>Aether-Guard is an <strong>autonomous AI SRE agent</strong> that detects incidents, performs root-cause analysis, and executes automated remediation actions with production-grade safety guarantees.</p>
+            
+            <h3>Key Features</h3>
+            <ul>
+                <li><strong>Hybrid RCA Engine:</strong> 60% deterministic rules (&lt;50ms, free) + 40% LLM-powered analysis (2-5s, Claude Sonnet 4.5)</li>
+                <li><strong>6-Layer Safety Pipeline:</strong> Rules → Policy → Approval → Remediation → Verification → Auto-Rollback</li>
+                <li><strong>Production Ready:</strong> 280 passing tests, full CI/CD, observability with Prometheus/Grafana/Tempo</li>
+                <li><strong>Cost Efficient:</strong> 60% cost reduction vs pure LLM approach ($2.40/month for 1000 incidents)</li>
+                <li><strong>Works Offline:</strong> Deterministic rule layer continues functioning even when Claude API is unavailable</li>
+            </ul>
+
+            <h3>Architecture Highlights</h3>
+            <table>
+                <tr>
+                    <th>Component</th>
+                    <th>Technology</th>
+                    <th>Purpose</th>
+                </tr>
+                <tr>
+                    <td>Agent</td>
+                    <td>Python + Claude 4.5</td>
+                    <td>Hybrid RCA, policy enforcement, verification</td>
+                </tr>
+                <tr>
+                    <td>Listener</td>
+                    <td>Python FastAPI</td>
+                    <td>Alertmanager webhook receiver, enrichment</td>
+                </tr>
+                <tr>
+                    <td>Target Service</td>
+                    <td>Go 1.25</td>
+                    <td>Demo workload with chaos injection endpoints</td>
+                </tr>
+                <tr>
+                    <td>Storage</td>
+                    <td>Postgres + Redis</td>
+                    <td>Incident analytics, RAG similarity search</td>
+                </tr>
+                <tr>
+                    <td>Observability</td>
+                    <td>Prometheus + Grafana + Tempo</td>
+                    <td>Metrics, dashboards, distributed tracing</td>
+                </tr>
+            </table>
+        </section>
+
+        <section>
+            <h2>Quick Start</h2>
+            <p>Clone the repository and start the full stack with Docker Compose:</p>
+            <pre style="background: #f4f4f4; padding: 1rem; border-radius: 4px; overflow-x: auto;"><code>git clone https://github.com/jnzm02/Aether-guard.git
+cd Aether-guard
+cp .env.example .env
+# Add your ANTHROPIC_API_KEY to .env
+make docker-up</code></pre>
+            <p>This starts:</p>
+            <ul>
+                <li>Target service (port 8080) - demo workload with chaos endpoints</li>
+                <li>Listener (port 8081) - webhook receiver</li>
+                <li>Agent (port 8082) - AI SRE brain</li>
+                <li>Prometheus (port 9090) - metrics</li>
+                <li>Grafana (port 3001) - dashboards</li>
+                <li>Postgres + Redis - persistence</li>
+            </ul>
+        </section>
+
+        <section>
+            <h2>Project Status</h2>
+            <div class="note">
+                <strong>Note:</strong> This is an active research project demonstrating production-grade AI agent safety patterns. The V2 architecture is complete with full test coverage and CI/CD. Ongoing work focuses on reliability improvements and expanded pattern coverage.
+            </div>
+            <p><strong>Current Version:</strong> V2 (Phase A-C complete)</p>
+            <ul>
+                <li>✅ Phase A: Production-grade target service with 9 validated chaos patterns</li>
+                <li>✅ Phase B: Hybrid RCA engine (deterministic rules + LLM fallback)</li>
+                <li>✅ Phase C: RAG-augmented investigation with similarity search</li>
+                <li>✅ 280 tests passing (Go + Python)</li>
+                <li>✅ Full observability stack (metrics, logs, traces)</li>
+                <li>✅ Policy-based safety gates and auto-rollback</li>
+            </ul>
+        </section>
+
+        <section>
+            <h2>Resources</h2>
+            <ul>
+                <li><a href="https://github.com/jnzm02/Aether-guard">GitHub Repository</a></li>
+                <li><a href="https://github.com/jnzm02/Aether-guard/blob/main/README.md">Full README</a></li>
+                <li><a href="/docs">Technical Documentation</a></li>
+                <li><a href="https://github.com/jnzm02/Aether-guard/blob/main/docs/ARCHITECTURE_V2.md">V2 Architecture Deep Dive</a></li>
+                <li><a href="https://github.com/jnzm02/Aether-guard/blob/main/docs/SERVICE_CONTRACT_v1.md">Service Contract v1.0</a></li>
+            </ul>
+        </section>
+
+        <footer>
+            <p>Aether-Guard © 2025 | <a href="https://github.com/jnzm02/Aether-guard">GitHub</a></p>
+            <p style="margin-top: 0.5rem; font-size: 0.85rem; color: #999;">Full interactive site with simulator and engineering blog in progress</p>
+        </footer>
+    </div>
+</body>
+</html>

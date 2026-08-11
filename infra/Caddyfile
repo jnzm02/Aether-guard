@@ -1,0 +1,91 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Aether Guard - Caddy Reverse Proxy Configuration
+# Automatic HTTPS with Let's Encrypt
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Main domain - Static website
+aether-guard.com, www.aether-guard.com {
+    root * /var/www/aether-guard.com
+    file_server
+    
+    # Enable compression
+    encode gzip
+    
+    # Security headers
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        X-XSS-Protection "1; mode=block"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+    
+    # SPA-style routing (try files, fallback to index.html for clean URLs)
+    try_files {path} {path}/ /index.html
+}
+
+# Grafana Dashboard
+grafana.aether-guard.com {
+    reverse_proxy localhost:3001
+    
+    # Enable WebSocket support for Grafana live features
+    @websockets {
+        header Connection *Upgrade*
+        header Upgrade websocket
+    }
+    reverse_proxy @websockets localhost:3001
+}
+
+# Prometheus
+prometheus.aether-guard.com {
+    reverse_proxy localhost:9090
+    
+    # Basic auth for security (optional)
+    # basicauth {
+    #     admin $2a$14$...
+    # }
+}
+
+# Alertmanager
+alertmanager.aether-guard.com {
+    reverse_proxy localhost:9093
+}
+
+# Target Service API
+api.aether-guard.com {
+    reverse_proxy localhost:8080
+}
+
+# Event Tracker
+events.aether-guard.com {
+    reverse_proxy localhost:8083
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UlttyqMarket - E-commerce Platform
+# ─────────────────────────────────────────────────────────────────────────────
+
+ulttyq-market.aether-guard.com {
+    # Main application
+    reverse_proxy localhost:8084
+    
+    # MinIO S3 media access
+    handle_path /media/* {
+        reverse_proxy localhost:9002
+    }
+    
+    # Enable compression
+    encode gzip
+    
+    # Security headers
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        X-XSS-Protection "1; mode=block"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+}
+
+# MinIO Console (Admin UI)
+minio.ulttyq-market.aether-guard.com {
+    reverse_proxy localhost:9003
+}

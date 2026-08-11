@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Documentation — Aether-Guard</title>
+    <meta name="description" content="Technical documentation for Aether-Guard autonomous AI SRE agent">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 2rem 1rem;
+        }
+        header {
+            background: #fff;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+        }
+        h1 { font-size: 2.5rem; margin-bottom: 0.5rem; color: #1a1a1a; }
+        .breadcrumb { font-size: 0.9rem; color: #666; margin-bottom: 1rem; }
+        .breadcrumb a { color: #0066cc; text-decoration: none; }
+        .breadcrumb a:hover { text-decoration: underline; }
+        section {
+            background: #fff;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+        }
+        h2 { font-size: 1.8rem; margin-bottom: 1rem; color: #1a1a1a; border-bottom: 2px solid #0066cc; padding-bottom: 0.5rem; }
+        h3 { font-size: 1.3rem; margin-top: 1.5rem; margin-bottom: 0.75rem; color: #333; }
+        .doc-list { list-style: none; margin-left: 0; }
+        .doc-list li { margin-bottom: 1.5rem; padding: 1rem; background: #f8f8f8; border-radius: 4px; }
+        .doc-list h4 { font-size: 1.2rem; margin-bottom: 0.5rem; }
+        .doc-list h4 a { color: #0066cc; text-decoration: none; }
+        .doc-list h4 a:hover { text-decoration: underline; }
+        .doc-list p { color: #666; font-size: 0.95rem; }
+        .tag { display: inline-block; background: #e3f2fd; color: #1565c0; padding: 0.2rem 0.6rem; border-radius: 3px; font-size: 0.85rem; margin-right: 0.5rem; }
+        footer { text-align: center; padding: 2rem 1rem; color: #666; font-size: 0.9rem; }
+        a { color: #0066cc; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <p class="breadcrumb"><a href="/">Home</a> / Documentation</p>
+            <h1>📚 Documentation</h1>
+        </header>
+
+        <section>
+            <h2>Core Documentation</h2>
+            <ul class="doc-list">
+                <li>
+                    <h4><a href="https://github.com/jnzm02/Aether-guard/blob/main/README.md">README — Project Overview</a></h4>
+                    <p><span class="tag">Overview</span> Complete project introduction, V2 architecture, quick start guide, and feature comparison</p>
+                </li>
+                <li>
+                    <h4><a href="https://github.com/jnzm02/Aether-guard/blob/main/docs/ARCHITECTURE_V2.md">V2 Architecture Deep Dive</a></h4>
+                    <p><span class="tag">Architecture</span> Detailed design of the 6-layer safety pipeline, hybrid RCA engine, and system components</p>
+                </li>
+                <li>
+                    <h4><a href="https://github.com/jnzm02/Aether-guard/blob/main/docs/SERVICE_CONTRACT_v1.md">Service Contract v1.0</a></h4>
+                    <p><span class="tag">API</span> Go SDK contract for monitored services: health checks, startup delays, shutdown signals</p>
+                </li>
+                <li>
+                    <h4><a href="https://github.com/jnzm02/Aether-guard/blob/main/docs/BRING_YOUR_OWN_SERVICE.md">Bring Your Own Service</a></h4>
+                    <p><span class="tag">Integration</span> Guide to onboarding your own service into Aether-Guard monitoring</p>
+                </li>
+                <li>
+                    <h4><a href="https://github.com/jnzm02/Aether-guard/blob/main/docs/CICD-ARCHITECTURE.md">CI/CD Architecture</a></h4>
+                    <p><span class="tag">DevOps</span> Continuous integration and deployment pipeline design</p>
+                </li>
+            </ul>
+        </section>
+
+        <section>
+            <h2>Incident Runbooks</h2>
+            <ul class="doc-list">
+                <li>
+                    <h4><a href="https://github.com/jnzm02/Aether-guard/blob/main/docs/runbooks/memory-leak.md">Memory Leak Incidents</a></h4>
+                    <p><span class="tag">Runbook</span> Detection, diagnosis, and remediation for memory leak scenarios</p>
+                </li>
+                <li>
+                    <h4><a href="https://github.com/jnzm02/Aether-guard/blob/main/docs/runbooks/high-latency.md">High Latency Incidents</a></h4>
+                    <p><span class="tag">Runbook</span> Latency spike investigation and resolution procedures</p>
+                </li>
+                <li>
+                    <h4><a href="https://github.com/jnzm02/Aether-guard/blob/main/docs/runbooks/high-error-rate.md">High Error Rate Incidents</a></h4>
+                    <p><span class="tag">Runbook</span> Error rate spike analysis and mitigation steps</p>
+                </li>
+                <li>
+                    <h4><a href="https://github.com/jnzm02/Aether-guard/blob/main/docs/runbooks/service-down.md">Service Down Incidents</a></h4>
+                    <p><span class="tag">Runbook</span> Service unavailability detection and recovery</p>
+                </li>
+            </ul>
+        </section>
+
+        <section>
+            <h2>Setup Guides</h2>
+            <ul class="doc-list">
+                <li>
+                    <h4><a href="https://github.com/jnzm02/Aether-guard/blob/main/docs/MCP_SETUP.md">MCP Setup Guide</a></h4>
+                    <p><span class="tag">Configuration</span> Connecting Claude Code to live systems via Model Context Protocol</p>
+                </li>
+                <li>
+                    <h4><a href="https://github.com/jnzm02/Aether-guard/blob/main/.env.example">.env.example</a></h4>
+                    <p><span class="tag">Configuration</span> Environment variable reference for all services</p>
+                </li>
+            </ul>
+        </section>
+
+        <section>
+            <h2>Quick Links</h2>
+            <ul style="margin-left: 1.5rem;">
+                <li><a href="https://github.com/jnzm02/Aether-guard">GitHub Repository</a></li>
+                <li><a href="https://github.com/jnzm02/Aether-guard/tree/main/docs">All Documentation Files</a></li>
+                <li><a href="https://github.com/jnzm02/Aether-guard/tree/main/services">Service Source Code</a></li>
+                <li><a href="https://github.com/jnzm02/Aether-guard/tree/main/infra">Infrastructure Configs</a></li>
+                <li><a href="https://github.com/jnzm02/Aether-guard/blob/main/Makefile">Makefile Commands</a></li>
+            </ul>
+        </section>
+
+        <footer>
+            <p>Aether-Guard © 2025 | <a href="https://github.com/jnzm02/Aether-guard">GitHub</a> | <a href="/">Home</a></p>
+        </footer>
+    </div>
+</body>
+</html>
