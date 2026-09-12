@@ -44,6 +44,7 @@ import metrics
 import enrichment
 import tracing  # OpenTelemetry setup
 from opentelemetry import trace
+from llm_provider import create_llm_provider, get_provider_info, validate_provider_config, LLMProvider
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pydantic response models (used by FastAPI for Swagger schema generation)
@@ -170,9 +171,14 @@ except ImportError as e:
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration
 # ─────────────────────────────────────────────────────────────────────────────
+# LLM Provider configuration (supports Anthropic and OpenAI)
+LLM_PROVIDER         = os.getenv("LLM_PROVIDER", "anthropic")
 ANTHROPIC_API_KEY    = os.getenv("ANTHROPIC_API_KEY", "")
-LISTENER_URL         = os.getenv("LISTENER_URL",         "http://listener:8081")
+OPENAI_API_KEY       = os.getenv("OPENAI_API_KEY", "")
 CLAUDE_MODEL         = os.getenv("CLAUDE_MODEL",         "claude-sonnet-4-5-20250929")
+OPENAI_MODEL         = os.getenv("OPENAI_MODEL",         "gpt-4-turbo-2024-04-09")
+
+LISTENER_URL         = os.getenv("LISTENER_URL",         "http://listener:8081")
 POLL_INTERVAL        = int(os.getenv("POLL_INTERVAL",    "10"))
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.60"))
 ANALYSIS_LOG_PATH    = Path(os.getenv("ANALYSIS_LOG_PATH", "/app/data/analyses.jsonl"))
@@ -207,30 +213,36 @@ _stats = {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Claude client  (lazy init after startup validation)
+# LLM Provider  (lazy init after startup validation)
 # ─────────────────────────────────────────────────────────────────────────────
-_claude: anthropic.AsyncAnthropic | None = None
+_llm_provider: LLMProvider | None = None
 
 
-def get_claude() -> anthropic.AsyncAnthropic:
-    global _claude
-    if _claude is None:
-        if not ANTHROPIC_API_KEY:
-            raise RuntimeError(
-                "ANTHROPIC_API_KEY is not set. "
-                "Export it before starting the agent."
-            )
-        _claude = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
-    return _claude
+def get_llm_provider() -> LLMProvider:
+    """Get or create the LLM provider instance (Anthropic or OpenAI)."""
+    global _llm_provider
+    if _llm_provider is None:
+        # Validate configuration before creating provider
+        is_valid, error_msg = validate_provider_config()
+        if not is_valid:
+            raise RuntimeError(error_msg)
+
+        _llm_provider = create_llm_provider()
+        provider_info = get_provider_info()
+        log.info(
+            f"LLM provider initialized: {provider_info['provider']} "
+            f"(model: {provider_info['model']})"
+        )
+    return _llm_provider
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Claude interaction
+# LLM interaction (works with both Anthropic and OpenAI)
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def call_claude(user_prompt: str, attempt: int = 1) -> dict[str, Any]:
+async def call_llm(user_prompt: str, attempt: int = 1) -> dict[str, Any]:
     """
-    Call the Claude API and return the parsed JSON analysis.
+    Call the LLM API (Anthropic or OpenAI) and return the parsed JSON analysis.
 
     Retry strategy:
       Attempt 1: normal call
@@ -239,36 +251,31 @@ async def call_claude(user_prompt: str, attempt: int = 1) -> dict[str, Any]:
 
     Returns a validated dict matching the agent output schema.
     """
-    client = get_claude()
+    provider = get_llm_provider()
+    provider_info = get_provider_info()
 
-    messages = [{"role": "user", "content": user_prompt}]
+    # For attempt 2, add JSON priming to the user prompt
+    final_user_prompt = user_prompt
     if attempt == 2:
-        messages.append({
-            "role": "assistant",
-            "content": "{"          # prime the JSON object open brace
-        })
+        final_user_prompt = user_prompt + "\n\nReturn ONLY the JSON object, starting with {. No other text."
 
-    log.info("Calling Claude  model=%s  attempt=%d", CLAUDE_MODEL, attempt)
+    log.info("Calling %s  model=%s  attempt=%d",
+             provider_info['provider'],
+             provider_info['model'],
+             attempt)
     t0 = time.monotonic()
 
-    response = await client.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=1024,
+    # Call the LLM provider (works for both Anthropic and OpenAI)
+    raw_text = await provider.generate(
         system=SYSTEM_PROMPT,
-        messages=messages,
+        user=final_user_prompt,
+        max_tokens=1024,
     )
 
     elapsed = time.monotonic() - t0
-    raw_text = response.content[0].text.strip()
-
-    # If we primed with "{", prepend it back
-    if attempt == 2 and not raw_text.startswith("{"):
-        raw_text = "{" + raw_text
-
     log.info(
-        "Claude responded  tokens_in=%d  tokens_out=%d  elapsed=%.2fs",
-        response.usage.input_tokens,
-        response.usage.output_tokens,
+        "%s responded  elapsed=%.2fs",
+        provider_info['provider'].capitalize(),
         elapsed,
     )
 
@@ -449,7 +456,7 @@ async def analyze_alert(alert: dict) -> dict[str, Any]:
 
                     for attempt in range(1, 4):
                         try:
-                            raw_analysis = await call_claude(user_prompt, attempt=attempt)
+                            raw_analysis = await call_llm(user_prompt, attempt=attempt)
                             rca_method = "llm-assisted"
                             llm_span.set_attribute("llm.attempts", attempt)
                             llm_span.set_attribute("llm.success", True)
@@ -962,15 +969,17 @@ tracing.instrument_fastapi(app)
     responses={200: {"description": "Agent is running and configuration is valid"}},
 )
 async def health():
+    provider_info = get_provider_info()
     return {
         "status":           "ok",
         "service":          "aether-guard/agent",
         "version":          "1.1.0",
-        "model":            CLAUDE_MODEL,
+        "model":            provider_info['model'],
+        "llm_provider":     provider_info['provider'],
         "listener_url":     LISTENER_URL,
         "poll_interval_s":  POLL_INTERVAL,
         "dry_run":          DRY_RUN,
-        "api_key_set":      bool(ANTHROPIC_API_KEY),
+        "api_key_set":      provider_info['api_key_set'],
         "analyses_total":   len(analyses),
         **_stats,
     }

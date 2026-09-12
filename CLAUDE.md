@@ -18,7 +18,7 @@ The system is a set of cooperating services under `services/`:
 |---------|----------|------|------|
 | `target-service` | Go | 8080 | Demo workload with chaos-injection endpoints (`/chaos/*`) and Prometheus metrics. The thing that "breaks." |
 | `listener` | Python (FastAPI) | 8081 | Receives Alertmanager webhooks, enriches alerts with metric snapshots, queues them for the agent. |
-| `agent` | Python (FastAPI) | 8082 | The SRE brain: hybrid RCA (rules + Claude LLM), policy gating, remediation, verification, post-mortems. |
+| `agent` | Python (FastAPI) | 8082 | The SRE brain: hybrid RCA (rules + LLM), policy gating, remediation, verification, post-mortems. Supports Claude or GPT-4. |
 | `event-tracker` | Go | — | Ingests real traffic signals (e.g. GitHub Events API) for validation. |
 
 Supporting infra (Prometheus 9090, Alertmanager 9093, Grafana 3001, Redis, Postgres)
@@ -31,7 +31,8 @@ The agent is the most complex service. Key modules:
 
 - `agent.py` — main loop / FastAPI app (largest file, ~72k).
 - `rules.py` — deterministic rules-based RCA (the fast, free, offline path).
-- `prompt.py` — LLM prompt construction for the Claude-based RCA path.
+- `prompt.py` — LLM prompt construction for the AI-based RCA path.
+- `llm_provider.py` — Provider abstraction (supports Anthropic Claude + OpenAI GPT-4).
 - `policy.py` — action gating / safety policy.
 - `remediation.py` — executes remediation actions.
 - `verification.py` — post-remediation metric checks + rollback decision.
@@ -99,9 +100,11 @@ CD/deploy debugging — be careful editing `scripts/deploy.sh`).
 
 ## Conventions
 
-- **LLM usage**: default to the latest Claude models. Existing config references
-  `claude-sonnet-4-5-20250929` via `CLAUDE_MODEL`; the newest models are the Claude 5
-  family and Opus/Haiku 4.x — prefer those for new work unless matching existing config.
+- **LLM usage**: Aether-Guard supports **both Anthropic (Claude) and OpenAI (GPT-4)** via
+  the `LLM_PROVIDER` env var. Default is Anthropic for cost efficiency. Existing config
+  references `claude-sonnet-4-5-20250929` via `CLAUDE_MODEL`; the newest models are Claude 5
+  family and Opus/Haiku 4.x. For OpenAI, use `gpt-4-turbo-2024-04-09` (default) or newer.
+  Provider abstraction is in `services/agent/llm_provider.py`.
 - **Safety first**: this system takes real remediation actions. Preserve the
   `DRY_RUN` guard, confidence thresholds, and policy gating. Never weaken a safety
   layer to make a test pass.

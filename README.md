@@ -7,7 +7,7 @@
 ![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go)
 ![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python)
 ![Prometheus](https://img.shields.io/badge/Prometheus-2.48-E6522C?logo=prometheus)
-![Claude](https://img.shields.io/badge/Claude-Sonnet_4.5-8A2BE2)
+![LLM](https://img.shields.io/badge/LLM-Claude_|_OpenAI-8A2BE2)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker)
 ![Kubernetes](https://img.shields.io/badge/Kubernetes-Ready-326CE5?logo=kubernetes)
 ![Tests](https://img.shields.io/badge/Tests-280_Passing-brightgreen)
@@ -309,7 +309,9 @@ aether-guard/
 
 - Docker Desktop (or Docker Engine + Compose plugin)
 - Python 3.11+ (for local scripts only)
-- An [Anthropic API key](https://console.anthropic.com/)
+- **LLM API Key** (choose one):
+  - [Anthropic API key](https://console.anthropic.com/) for Claude (default)
+  - [OpenAI API key](https://platform.openai.com/api-keys) for GPT-4/GPT-4-turbo/o1
 
 ### 1. Clone & configure
 
@@ -317,7 +319,22 @@ aether-guard/
 git clone https://github.com/jnzm02/Aether-guard.git
 cd Aether-guard
 cp .env.example .env
-# Edit .env — add your ANTHROPIC_API_KEY
+# Edit .env — add your API key
+```
+
+**For Anthropic (Claude)** — default:
+```bash
+# In .env
+LLM_PROVIDER=anthropic
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+**For OpenAI (GPT-4)**:
+```bash
+# In .env
+LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-...
+# OPENAI_MODEL=gpt-4-turbo-2024-04-09  # Optional, defaults to gpt-4-turbo
 ```
 
 ### 2. Start the full stack (V2 with Redis)
@@ -481,18 +498,31 @@ validate-infra-config ─────┘
 Copy `.env.example` to `.env` and fill in:
 
 ```bash
-# Required
-ANTHROPIC_API_KEY=sk-ant-...        # Required — Claude API key
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# LLM Provider (choose Anthropic or OpenAI)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+LLM_PROVIDER=anthropic              # Options: anthropic | openai (default: anthropic)
 
+# For Anthropic (Claude) — default provider
+ANTHROPIC_API_KEY=sk-ant-...        # Required if LLM_PROVIDER=anthropic
+CLAUDE_MODEL=claude-sonnet-4-5-20250929  # Optional (default shown)
+
+# For OpenAI (GPT-4, GPT-4-turbo, o1)
+# OPENAI_API_KEY=sk-...             # Required if LLM_PROVIDER=openai
+# OPENAI_MODEL=gpt-4-turbo-2024-04-09  # Optional (default shown)
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Optional: Priority 8 RAG-Augmented Investigation
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 VOYAGE_API_KEY=pa-...               # Optional — Voyage AI for embeddings (enables RAG)
 RAG_ENABLED=true                    # Enable multi-step investigation graph
 RAG_MAX_ITERATIONS=2                # Hard iteration cap (prevents unbounded loops)
 RAG_CONFIDENCE_THRESHOLD=0.75       # Min confidence to finalize without refinement
 SIMILARITY_MIN_CONFIDENCE=0.7       # Min confidence for similarity search retrieval
 
-# Other optional overrides
-CLAUDE_MODEL=claude-sonnet-4-5-20250929
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Other Configuration
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CONFIDENCE_THRESHOLD=0.75           # Min confidence to execute an action
 DRY_RUN=false                       # Set true to skip Docker remediation calls
 POLL_INTERVAL=10                    # Agent polling interval (seconds)
@@ -502,6 +532,21 @@ REDIS_URL=redis://redis:6379/0      # Redis connection URL (V2)
 MONITORED_JOB=target-service        # Must match Prometheus job_name
 TARGET_CONTAINER=target-service     # Docker container name for logs/remediation
 ```
+
+### LLM Provider Comparison
+
+| Feature | Anthropic (Claude) | OpenAI (GPT-4) |
+|---------|-------------------|----------------|
+| **Default Model** | claude-sonnet-4-5-20250929 | gpt-4-turbo-2024-04-09 |
+| **Supported Models** | Claude 3.x/4.x/5.x Sonnet, Opus, Haiku | GPT-4, GPT-4-turbo, GPT-4o, o1-preview, o1-mini |
+| **Input Cost** | $3 / million tokens | $10 / million tokens |
+| **Output Cost** | $15 / million tokens | $30 / million tokens |
+| **Estimated Cost** (1000 incidents/month, 40% LLM) | **$2.40/month** | $8/month |
+| **JSON Mode** | Prompt-based (works well) | Prompt-based (works well) |
+| **Context Window** | 200K tokens | 128K tokens |
+| **Best For** | **Cost-efficiency, long context** | Familiarity, existing integrations |
+
+**Recommendation**: Use **Anthropic (Claude)** for production (60% cost savings). Use **OpenAI** if you already have credits or prefer GPT-4.
 
 ### Using Aether-Guard with Your Own Service
 
