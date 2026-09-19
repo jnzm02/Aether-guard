@@ -390,7 +390,7 @@ async def test_full_pipeline_benchmark():
     # Baseline (no tracing)
     trace.set_tracer_provider(trace.NoOpTracerProvider())
 
-    with patch("agent.call_claude", new=mock_call_claude), \
+    with patch("agent.call_llm", new=mock_call_claude), \
          patch("agent._rule_engine", None):  # Disable rule engine to force LLM path
 
         for _ in range(iterations):
@@ -407,7 +407,7 @@ async def test_full_pipeline_benchmark():
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     trace.set_tracer_provider(provider)
 
-    with patch("agent.call_claude", new=mock_call_claude), \
+    with patch("agent.call_llm", new=mock_call_claude), \
          patch("agent._rule_engine", None):
 
         for _ in range(iterations):
