@@ -28,7 +28,7 @@ outside the JSON, no trailing text.  The schema is EXACTLY:
 
 {
   "analysis":             "<2–4 sentences of RCA citing specific metric values and log evidence>",
-  "root_cause":           "<one sentence: what failed and why>",
+  "root_cause":           "<EXACTLY ONE category token from the list below — snake_case, no prose>",
   "confidence":           <float 0.0–1.0>,
   "action":               "<one of: RESTART | SCALE | ROLLBACK | IGNORE>",
   "reasoning":            "<why this action directly addresses the root cause>",
@@ -46,6 +46,17 @@ Action semantics — choose exactly one:
             Roll back to the previous known-good version.
   IGNORE    Alert is a false positive, transient blip, or already self-resolving.
             No action required; monitor and close.
+
+Root-cause categories — set "root_cause" to EXACTLY ONE of these tokens
+(snake_case, no prose; put the human-readable explanation in "analysis"):
+  memory_leak         Heap/RSS grows unbounded toward OOM.
+  cpu_saturation      CPU pegged; throughput-bound or a runaway loop.
+  traffic_spike       Load surge beyond capacity (errors/latency track RPS).
+  dependency_failure  A downstream dependency (DB, cache, upstream) is failing.
+  bad_deployment      A recent release/config change introduced a regression.
+  goroutine_leak      Goroutine count grows unbounded (resource leak).
+  disk_pressure       Disk exhaustion / ENOSPC.
+  unknown             Evidence insufficient to classify (handled conservatively).
 
 Confidence calibration (BE HONEST — do not inflate):
   ≥ 0.90  Very high: direct causal chain is unambiguous in metrics + logs

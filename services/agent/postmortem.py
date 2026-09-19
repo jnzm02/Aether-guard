@@ -216,6 +216,10 @@ def _timeline_section(a: dict) -> str:
 
 def _root_cause_section(a: dict) -> str:
     root_cause = a.get("root_cause", "Root cause could not be determined.")
+    # When the model's cause didn't map to a category, root_cause is the "unknown"
+    # token; surface the preserved human-readable detail here instead.
+    if root_cause == "unknown" and a.get("root_cause_detail"):
+        root_cause = a["root_cause_detail"]
     reasoning  = a.get("reasoning", "")
     confidence = a.get("confidence", 0.0)
     conf_label = _confidence_label(confidence)
