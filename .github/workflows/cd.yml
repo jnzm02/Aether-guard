@@ -197,7 +197,11 @@ jobs:
           REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }}
           CLAUDE_MODEL=claude-sonnet-4-5-20250929
           CONFIDENCE_THRESHOLD=0.75
-          DRY_RUN=false
+          # DRY_RUN=true: the agent now takes REAL remediation on the LLM path
+          # (prompt↔policy contract fix). Keep prod in dry-run — it analyzes and
+          # logs intended actions without touching Docker — until a human flips
+          # this to false to enable live remediation.
+          DRY_RUN=true
           POLL_INTERVAL=10
           DOCKER_REGISTRY=${{ secrets.DOCKER_REGISTRY }}
           DOCKER_REGISTRY_USERNAME=${{ secrets.DOCKER_REGISTRY_USERNAME }}
