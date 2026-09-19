@@ -314,6 +314,30 @@ def _parse_and_validate(raw: str) -> dict[str, Any]:
             f"action must be one of {VALID_ACTIONS}, got {data['action']!r}"
         )
 
+    # Normalize + validate root_cause against the policy vocabulary so the
+    # policy engine (which calls RootCauseCategory(root_cause)) never receives
+    # free-text prose. This closes the prompt↔policy contract gap: the prompt
+    # asks for a category token, and here we enforce it. Anything unrecognized
+    # (or genuine prose from an older/looser model) degrades to "unknown",
+    # which the policy matrix only ever pairs with IGNORE — fail-safe, never a
+    # fabricated action. The original text is preserved for the post-mortem.
+    try:
+        from policy import RootCauseCategory
+        valid_causes = {c.value for c in RootCauseCategory}
+    except Exception:
+        valid_causes = set()  # V1 mode (no policy layer) — nothing to enforce
+    if valid_causes:
+        normalized = str(data["root_cause"]).strip().lower().replace(" ", "_")
+        if normalized not in valid_causes:
+            log.warning(
+                "root_cause %r is not a known category — normalizing to 'unknown'",
+                data["root_cause"],
+            )
+            data["root_cause_detail"] = data["root_cause"]  # keep prose for the post-mortem
+            data["root_cause"] = "unknown"
+        else:
+            data["root_cause"] = normalized
+
     # Safety gate: low confidence → force IGNORE regardless of model output
     if data["confidence"] < CONFIDENCE_THRESHOLD and data["action"] != "IGNORE":
         log.warning(
@@ -662,8 +686,15 @@ async def _process_single_alert(alert: dict[str, Any], source: str = "poll") -> 
                         }
 
                     except Exception as policy_exc:
-                        log.warning("Policy engine failed: %s — allowing action", policy_exc)
+                        # Fail CLOSED: a policy-engine error must never allow an
+                        # unvetted remediation. Force IGNORE (mirrors the not-allowed
+                        # branch above). This path only became reachable once a valid
+                        # LLM root_cause could satisfy the policy matrix.
+                        log.error("Policy engine failed: %s — failing closed → IGNORE", policy_exc)
                         policy_span.set_attribute("policy.error", str(policy_exc))
+                        analysis["action"] = "IGNORE"
+                        analysis["reasoning"] += f"\n[Policy engine error — failed closed: {policy_exc}]"
+                        analysis["policy_blocked"] = True
 
             # ────────────────────────────────────────────────────────────
             # V2: Capture metrics BEFORE remediation (for verification)

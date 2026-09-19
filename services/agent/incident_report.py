@@ -149,6 +149,12 @@ def build_report(analysis: dict[str, Any]) -> IncidentReport:
     # Extract trace_id (may be in alert_labels or directly in analysis)
     trace_id = analysis.get("alert_labels", {}).get("trace_id") or analysis.get("trace_id")
 
+    # Prefer the preserved prose when the model's cause didn't map to a category
+    # (root_cause is then the "unknown" token) — keeps reports/embeddings informative.
+    root_cause = analysis.get("root_cause", "unknown")
+    if root_cause == "unknown" and analysis.get("root_cause_detail"):
+        root_cause = analysis["root_cause_detail"]
+
     return IncidentReport(
         incident_id=analysis.get("alert_id", "unknown"),
         trace_id=trace_id,
@@ -158,7 +164,7 @@ def build_report(analysis: dict[str, Any]) -> IncidentReport:
         trigger=analysis.get("alertname", "unknown"),
         matched_pattern=matched_pattern,
         confidence=float(analysis.get("confidence", 0.0)),
-        root_cause=analysis.get("root_cause", "unknown"),
+        root_cause=root_cause,
         reasoning=analysis.get("reasoning", ""),
         action_taken=action_taken,
         remediation_outcome=remediation_outcome,
