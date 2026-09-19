@@ -27,6 +27,19 @@ import os
 from abc import ABC, abstractmethod
 from typing import Any
 
+# Provider SDKs are optional dependencies — import them at module level so a
+# deployment can install only the one it uses, and so the module always exposes
+# `llm_provider.anthropic` / `llm_provider.openai` (which the tests patch). A
+# missing SDK is a real value (None) that each provider checks before use.
+try:
+    import anthropic
+except ImportError:  # pragma: no cover - exercised only without the SDK installed
+    anthropic = None
+try:
+    import openai
+except ImportError:  # pragma: no cover - exercised only without the SDK installed
+    openai = None
+
 log = logging.getLogger(__name__)
 
 
@@ -78,14 +91,12 @@ class AnthropicProvider(LLMProvider):
 
     def __init__(self, api_key: str, model: str):
         super().__init__(model)
-        try:
-            import anthropic
-            self.client = anthropic.AsyncAnthropic(api_key=api_key)
-        except ImportError:
+        if anthropic is None:
             raise RuntimeError(
                 "anthropic package not installed. "
                 "Install with: pip install anthropic"
             )
+        self.client = anthropic.AsyncAnthropic(api_key=api_key)
 
     async def generate(
         self,
@@ -125,14 +136,12 @@ class OpenAIProvider(LLMProvider):
 
     def __init__(self, api_key: str, model: str):
         super().__init__(model)
-        try:
-            import openai
-            self.client = openai.AsyncOpenAI(api_key=api_key)
-        except ImportError:
+        if openai is None:
             raise RuntimeError(
                 "openai package not installed. "
                 "Install with: pip install openai"
             )
+        self.client = openai.AsyncOpenAI(api_key=api_key)
 
     async def generate(
         self,
