@@ -44,3 +44,6 @@ PRODUCTION_SETUP.md
 QUICK_DEPLOY.md
 TELEGRAM_SETUP.md
 PROJECT_CONTEXT.md
+
+# Java build output
+services/target-service-java/target/
