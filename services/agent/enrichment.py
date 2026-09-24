@@ -26,6 +26,8 @@ from uuid import uuid4
 import docker
 import httpx
 
+from metric_profiles import metric_expr
+
 log = logging.getLogger("aether-guard.agent.enrichment")
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -53,37 +55,6 @@ except Exception as exc:
 # ─────────────────────────────────────────────────────────────────────────────
 # Prometheus golden-signal metrics
 # ─────────────────────────────────────────────────────────────────────────────
-
-# Each entry: (human-readable key, PromQL expression)
-_KEY_METRICS: list[tuple[str, str]] = [
-    (
-        "error_ratio_5m",
-        'sum(rate(aether_guard_http_requests_total{status_code=~"5.."}[5m]))'
-        " / sum(rate(aether_guard_http_requests_total[5m]))",
-    ),
-    (
-        "latency_p99_5m_seconds",
-        "histogram_quantile(0.99,"
-        " sum(rate(aether_guard_http_request_duration_seconds_bucket[5m])) by (le))",
-    ),
-    (
-        "latency_p50_5m_seconds",
-        "histogram_quantile(0.50,"
-        " sum(rate(aether_guard_http_request_duration_seconds_bucket[5m])) by (le))",
-    ),
-    (
-        "request_rate_5m_rps",
-        "sum(rate(aether_guard_http_requests_total[5m]))",
-    ),
-    (
-        "memleak_bytes_allocated",
-        "aether_guard_chaos_memleak_bytes_allocated",
-    ),
-    (
-        "chaos_errors_injected_total",
-        "sum(aether_guard_chaos_errors_injected_total)",
-    ),
-]
 
 # Build runtime metrics with configurable job name
 def _build_key_metrics():
@@ -116,19 +87,20 @@ def _build_key_metrics():
             "chaos_errors_injected_total",
             "sum(aether_guard_chaos_errors_injected_total)",
         ),
-        (
-            "runtime_goroutines",
-            f'go_goroutines{{job="{MONITORED_JOB}"}}',
-        ),
-        (
-            "runtime_heap_inuse_bytes",
-            f'go_memstats_heap_inuse_bytes{{job="{MONITORED_JOB}"}}',
-        ),
-        (
-            "cpu_usage_percent",
-            f'rate(process_cpu_seconds_total{{job="{MONITORED_JOB}"}}[5m]) * 100',
-        ),
     ]
+
+    # Runtime-specific signals (Go vs JVM) come from the active metric profile.
+    # A None expression means the signal doesn't exist for this runtime — skip it
+    # (the key is simply absent from the snapshot, which callers already tolerate).
+    for key, signal in (
+        ("runtime_goroutines", "goroutine_count"),
+        ("runtime_heap_inuse_bytes", "heap_inuse_bytes"),
+        ("cpu_usage_percent", "cpu_usage_pct"),
+        ("gc_pause_mean_seconds", "gc_pause_mean_seconds"),
+    ):
+        expr = metric_expr(signal, MONITORED_JOB)
+        if expr is not None:
+            base_metrics.append((key, expr))
     return base_metrics
 
 _KEY_METRICS = _build_key_metrics()

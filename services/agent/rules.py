@@ -40,6 +40,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from metric_profiles import metric_expr as profile_expr
 from policy import RootCauseCategory
 
 log = logging.getLogger(__name__)
@@ -61,6 +62,10 @@ GOROUTINE_LEAK_BASELINE_MULTIPLIER = float(
 HEAP_LEAK_SLOPE_THRESHOLD = float(
     os.getenv("HEAP_LEAK_SLOPE_THRESHOLD", "166666.67")  # 10 MB/min = 166666.67 bytes/sec
 )
+
+# JVM GC-pressure threshold (mean GC pause over 5m, seconds). JVM-only pattern;
+# 0.1s (100ms) mean pause indicates sustained heap pressure.
+GC_PAUSE_MEAN_THRESHOLD = float(os.getenv("GC_PAUSE_MEAN_THRESHOLD", "0.1"))
 
 
 @dataclass
@@ -164,6 +169,10 @@ class RuleEngine:
         if rule:
             return rule
 
+        rule = self._check_gc_pressure(alert_name, metrics)
+        if rule:
+            return rule
+
         rule = self._check_traffic_spike(alert_name, metrics)
         if rule:
             return rule
@@ -207,6 +216,10 @@ class RuleEngine:
             r"oom-kill",
             r"Killed process.*out of memory",
             r"Memory cgroup out of memory",
+            # JVM out-of-memory signatures
+            r"java\.lang\.OutOfMemoryError",
+            r"GC overhead limit exceeded",
+            r"Java heap space",
         ]
 
         evidence = []
@@ -244,6 +257,12 @@ class RuleEngine:
             r"Listening on port",
             r"Exited with code",
             r"Container.*started",
+            # JVM / Spring Boot: ONE canonical "(re)started" line only. The other
+            # boot boilerplate (Tomcat/context-init) co-occurs on a SINGLE healthy
+            # startup, which would count one normal restart as 3 and misfire the
+            # >=3 loop threshold → spurious ROLLBACK. One line = one restart, at
+            # the same granularity as the Go indicators above.
+            r"Started \w+ in [\d.]+ seconds",
         ]
 
         restart_count = 0
@@ -327,7 +346,7 @@ class RuleEngine:
         classifier = TrendClassifier()
         try:
             trend = await classifier.analyze_metric(
-                metric_expr=f'go_memstats_heap_alloc_bytes{{job="{MONITORED_JOB}"}}',
+                metric_expr=profile_expr("heap_alloc_bytes", MONITORED_JOB),
                 slope_threshold=HEAP_LEAK_SLOPE_THRESHOLD,
                 window_minutes=10,
                 step_seconds=30,
@@ -461,7 +480,7 @@ class RuleEngine:
                 try:
                     # Use CPU user time as the metric (more precise than cpu_usage_percent)
                     cpu_trend = await classifier.analyze_metric(
-                        metric_expr=f'rate(process_cpu_seconds_total{{job="{MONITORED_JOB}"}}[5m])',
+                        metric_expr=profile_expr("cpu_rate", MONITORED_JOB),
                         slope_threshold=0.01,  # 1% increase per second = runaway
                         window_minutes=10,
                         step_seconds=30,
@@ -577,6 +596,64 @@ class RuleEngine:
             )
         return None
 
+    def _check_gc_pressure(
+        self,
+        alert_name: str,
+        metrics: dict[str, Optional[float]],
+    ) -> Optional[RuleMatch]:
+        """
+        Detect JVM garbage-collection pressure (JVM-only pattern).
+
+        Signal: `gc_pause_mean_seconds` (mean GC pause over 5m), which the metric
+        profile only populates for the jvm runtime (Go's snapshot never carries
+        this key, so this rule is a no-op for Go). A sustained high mean pause
+        indicates the heap is under pressure / churning — the JVM analog of a
+        memory problem heading toward OutOfMemoryError.
+
+        Confidence: 0.85 (a >100ms mean pause is pathological — healthy JVM GC
+        pauses are single-digit ms — so this clears the 0.85 rule-acceptance gate
+        in agent.py and fires deterministically rather than escalating to the LLM).
+        Action: RESTART (clears heap state; a real fix is heap sizing / leak
+        investigation, surfaced in the reasoning).
+        Root cause maps to MEMORY_LEAK so the existing deny-by-default policy
+        entry applies unchanged (no new policy matrix entry required).
+        """
+        gc_pause = metrics.get("gc_pause_mean_seconds")
+        if gc_pause is None:
+            return None  # not a JVM service (or no GC data) → skip
+
+        if gc_pause <= GC_PAUSE_MEAN_THRESHOLD:
+            return None
+
+        # Corroboration (mirrors CPU_SATURATION_EFFICIENCY): only treat high GC as
+        # a heap problem when traffic is NORMAL. Under a traffic spike, elevated GC
+        # is load-driven — don't auto-RESTART; let TRAFFIC_SPIKE (SCALE) or the LLM
+        # adjudicate. This keeps the 0.85 auto-fire honest (single corroborated case).
+        request_rate = metrics.get("request_rate_5m")
+        TRAFFIC_THRESHOLD = 1000  # rps; same threshold as CPU/traffic rules
+        if request_rate and request_rate > TRAFFIC_THRESHOLD:
+            return None
+
+        signals = [
+            f"Mean GC pause: {gc_pause * 1000:.0f}ms "
+            f"(threshold: {GC_PAUSE_MEAN_THRESHOLD * 1000:.0f}ms)",
+            f"Request rate: {request_rate or 0:.0f} rps (normal, not traffic-driven)",
+        ]
+        return RuleMatch(
+            matched=True,
+            rule_name="GC_PRESSURE",
+            root_cause=RootCauseCategory.MEMORY_LEAK,
+            confidence=0.85,
+            evidence=signals,
+            recommended_action="RESTART",
+            reasoning=(
+                f"Sustained JVM GC pressure (mean pause {gc_pause * 1000:.0f}ms) indicates the "
+                "heap is churning under memory pressure, degrading latency and heading toward "
+                "OutOfMemoryError. RESTART clears heap state; follow up by reviewing heap sizing "
+                "(-Xmx) and investigating for a memory leak."
+            ),
+        )
+
     def _check_disk_pressure(self, alert: dict, logs: list[str]) -> Optional[RuleMatch]:
         """
         Detect disk exhaustion from ENOSPC log signatures.
@@ -634,6 +711,13 @@ class RuleEngine:
             r"database.*unavailable",
             r"redis.*connection.*failed",
             r"timeout.*waiting.*connection",
+            # JVM driver / client exception signatures
+            r"PSQLException",
+            r"JedisConnectionException",
+            r"SQLTransientConnectionException",
+            r"Connection is not available, request timed out",
+            r"UnknownHostException",
+            r"ConnectException",
         ]
 
         evidence = []
@@ -682,6 +766,12 @@ class RuleEngine:
             r"fatal error",
             r"failed to start",
             r"initialization.*failed",
+            # JVM / Spring Boot startup-failure signatures
+            r"APPLICATION FAILED TO START",
+            r"Exception in thread",
+            r"Caused by:",
+            r"BeanCreationException",
+            r"UnsatisfiedDependencyException",
         ]
         startup_errors = []
         for line in logs:
@@ -760,7 +850,7 @@ class RuleEngine:
         classifier = TrendClassifier()
         try:
             trend = await classifier.analyze_metric(
-                metric_expr=f'go_goroutines{{job="{MONITORED_JOB}"}}',
+                metric_expr=profile_expr("goroutine_count", MONITORED_JOB),
                 slope_threshold=GOROUTINE_LEAK_SLOPE_THRESHOLD,
                 window_minutes=10,
                 step_seconds=30,
@@ -811,7 +901,7 @@ class RuleEngine:
         # Confidence booster 1: Heap memory also rising (goroutine leak often causes memory leak)
         try:
             heap_trend = await classifier.analyze_metric(
-                metric_expr=f'go_memstats_heap_inuse_bytes{{job="{MONITORED_JOB}"}}',
+                metric_expr=profile_expr("heap_inuse_bytes", MONITORED_JOB),
                 slope_threshold=HEAP_LEAK_SLOPE_THRESHOLD,
                 window_minutes=10,
                 step_seconds=30,
