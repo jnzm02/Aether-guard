@@ -1,0 +1,137 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# target-service-java — JVM analog of target-service (generalization demo)
+#
+# A Spring Boot / Java 21 service the agent monitors via the jvm metric profile.
+# Differences from the Go manifest, all JVM-driven:
+#   - Much larger resource limits (a JVM will OOM/CPU-throttle at the Go 128Mi/200m)
+#   - Slower liveness startup (JVM boot) — longer initialDelaySeconds
+#   - Writable /tmp emptyDir (Tomcat work dir + heap dumps) with a read-only rootfs
+#   - JAVA_TOOL_OPTIONS caps the heap below the container limit
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: target-service-java
+  namespace: aether-guard
+  labels:
+    app: target-service-java
+    app.kubernetes.io/component: target-service-java
+    app.kubernetes.io/part-of: aether-guard
+    app.kubernetes.io/version: "1.0.0"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: target-service-java
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: target-service-java
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port:   "8085"
+        prometheus.io/path:   "/metrics"
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: target-service-java
+          image: aether-guard/target-service-java:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8085
+              protocol: TCP
+          env:
+            - name: SERVER_PORT
+              value: "8085"
+            # Keep the JVM heap below the container memory limit; leave room for
+            # metaspace/threads/off-heap. The chaos memleak can still exceed 1GB.
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:MaxRAMPercentage=75 -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/tmp"
+          resources:
+            requests:
+              cpu:    500m
+              memory: 512Mi
+            limits:
+              cpu:    "1"
+              memory: 1536Mi   # headroom above 1GB so the memleak-leak pattern is reachable
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 40   # JVM boot is slower than a Go binary
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 25
+            periodSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: target-service-java
+  namespace: aether-guard
+  labels:
+    app: target-service-java
+    app.kubernetes.io/component: target-service-java
+    app.kubernetes.io/part-of: aether-guard
+spec:
+  selector:
+    app: target-service-java
+  ports:
+    - name: http
+      port: 8085
+      targetPort: http
+      protocol: TCP
+  type: ClusterIP
+---
+# HPA — scale on CPU/memory. JVM warm-up makes CPU-based scaling coarse; in
+# production add a Prometheus-Adapter custom metric (e.g. request rate).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: target-service-java
+  namespace: aether-guard
+  labels:
+    app: target-service-java
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: target-service-java
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120

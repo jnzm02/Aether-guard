@@ -6,6 +6,7 @@ namespace: aether-guard
 resources:
   - namespace.yaml
   - target-service.yaml
+  - target-service-java.yaml
   - prometheus.yaml
   - alertmanager.yaml
   - listener.yaml
@@ -16,6 +17,8 @@ resources:
 #   kustomize edit set image aether-guard/target-service:v1.2.3
 images:
   - name: aether-guard/target-service
+    newTag: latest
+  - name: aether-guard/target-service-java
     newTag: latest
   - name: aether-guard/listener
     newTag: latest
