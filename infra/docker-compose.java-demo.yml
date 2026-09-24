@@ -1,0 +1,75 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Java-generalization demo OVERLAY — NOT deployed to production.
+#
+# The production deploy (scripts/deploy.sh) uses only docker-compose.yml +
+# docker-compose.prod.yml, so nothing here reaches prod. This overlay adds a JVM
+# demo service and a second agent instance (jvm metric profile) alongside the Go
+# stack to prove the agent detects Java problems (heap/thread leak, GC pressure).
+#
+# Usage (local / CI):
+#   docker compose -f docker-compose.yml -f docker-compose.java-demo.yml up -d --build
+# ─────────────────────────────────────────────────────────────────────────────
+
+volumes:
+  agent_java_data:
+
+services:
+  # JVM analog of target-service — Spring Boot + Micrometer, chaos endpoints.
+  target-service-java:
+    build:
+      context: ../services/target-service-java
+      dockerfile: Dockerfile
+    image: aether-guard/target-service-java:latest
+    container_name: target-service-java
+    ports:
+      - "8085:8085"
+    environment:
+      - SERVER_PORT=8085
+    restart: unless-stopped
+    networks:
+      - aether-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8085/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    labels:
+      com.aether-guard.component: "target-service-java"
+      com.aether-guard.phase: "generalization"
+
+  # Second agent instance, jvm metric profile, pointed at the Java service.
+  # Same image as `agent`; the Go `agent` is untouched.
+  agent-java:
+    image: aether-guard/agent:latest
+    build:
+      context: ../services/agent
+      dockerfile: Dockerfile
+    container_name: agent-java
+    ports:
+      - "8092:8082"
+    env_file:
+      - ../.env
+    environment:
+      - LISTENER_URL=http://listener:8081
+      - MONITORED_JOB=target-service-java
+      - MONITORED_RUNTIME=jvm
+      - TARGET_CONTAINER=target-service-java
+      - ANALYSIS_LOG_PATH=/app/data/analyses.jsonl
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/1
+      - POSTGRES_URL=postgresql://aether_guard:local_dev_password@postgres:5432/aether_guard
+      - RAG_ENABLED=false
+    volumes:
+      - agent_java_data:/app/data
+    restart: unless-stopped
+    networks:
+      - aether-net
+    depends_on:
+      - redis
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8082/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    labels:
+      com.aether-guard.component: "agent-java"
+      com.aether-guard.phase: "generalization"

@@ -1,0 +1,27 @@
+server:
+  port: 8085
+
+spring:
+  application:
+    name: target-service-java
+
+# Actuator is enabled for the JVM/process Micrometer binders, but the
+# Prometheus exposition is served at the plain "/metrics" path by
+# MetricsController (a JVM analog of the Go service's /metrics). The actuator
+# web endpoints themselves are locked down to health only.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  # NOTE: deliberately NO management.metrics.tags.* — a common tag would be
+  # added to every meter (e.g. aether_guard_http_requests_total{application=...})
+  # and break the exact label sets the Aether-Guard metric contract requires.
+
+# Optional real dependencies. Left blank by default → not configured → the
+# /health endpoint reports an empty dependency map and returns 200.
+dependencies:
+  postgres:
+    url: ""
+  redis:
+    url: ""

@@ -46,6 +46,16 @@ scrape_configs:
           service: "target-service"
           team:    "platform"
 
+  # Generalization: the JVM demo service (monitored by agent-java, jvm profile).
+  - job_name: "target-service-java"
+    metrics_path: "/metrics"
+    scrape_interval: 5s
+    static_configs:
+      - targets: ["target-service-java:8085"]
+        labels:
+          service: "target-service-java"
+          team:    "platform"
+
   # Priority 9: Event Tracker (GitHub Events API - real external dependency).
   - job_name: "event-tracker"
     metrics_path: "/metrics"

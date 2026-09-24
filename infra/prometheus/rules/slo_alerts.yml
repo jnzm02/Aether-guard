@@ -161,3 +161,72 @@ groups:
   # ── Inhibition context (referenced in alertmanager.yml) ────────────────────
   # When TargetServiceDown is firing, all other alerts are noise — the root cause
   # is the outage itself. Alertmanager inhibit_rules handle the suppression.
+
+  # ── JVM demo service (target-service-java) ─────────────────────────────────
+  # Job-scoped alerts for the Java service, monitored by the jvm metric profile.
+  # Kept separate from the (unscoped) rules above so the Go path is unchanged.
+  - name: aether_guard_slo_alerts_java
+    rules:
+      - alert: SLOErrorBudgetBurnCritical
+        expr: |
+          sum(rate(aether_guard_http_requests_total{job="target-service-java",status_code=~"5.."}[5m]))
+          / clamp_min(sum(rate(aether_guard_http_requests_total{job="target-service-java"}[5m])), 1e-9) > 0.05
+        for: 2m
+        labels: {severity: critical, team: platform, slo: availability, service: target-service-java}
+        annotations:
+          summary: "CRITICAL: target-service-java fast error-budget burn"
+          description: "5m error ratio on target-service-java exceeds 5%."
+
+      - alert: SLOErrorBudgetBurnWarning
+        expr: |
+          sum(rate(aether_guard_http_requests_total{job="target-service-java",status_code=~"5.."}[30m]))
+          / clamp_min(sum(rate(aether_guard_http_requests_total{job="target-service-java"}[30m])), 1e-9) > 0.005
+        for: 15m
+        labels: {severity: warning, team: platform, slo: availability, service: target-service-java}
+        annotations:
+          summary: "WARNING: target-service-java slow error-budget burn"
+          description: "30m error ratio on target-service-java exceeds 0.5%."
+
+      - alert: SLOLatencyP99Breach
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(aether_guard_http_request_duration_seconds_bucket{job="target-service-java"}[5m])) by (le)) > 0.2
+        for: 2m
+        labels: {severity: critical, team: platform, slo: latency, service: target-service-java}
+        annotations:
+          summary: "CRITICAL: target-service-java p99 latency breach"
+          description: "5m p99 latency on target-service-java exceeds 200ms."
+
+      - alert: MemorySaturationWarning
+        expr: aether_guard_chaos_memleak_bytes_allocated{job="target-service-java"} > 104857600
+        for: 1m
+        labels: {severity: warning, team: platform, slo: saturation, service: target-service-java}
+        annotations:
+          summary: "WARNING: target-service-java memory leak detected"
+          description: "Chaos memory-leak gauge on target-service-java exceeds 100 MiB; heap heading toward OOM."
+
+      # JVM-specific: thread leak (goroutine-leak analog)
+      - alert: JvmThreadLeakWarning
+        expr: jvm_threads_live_threads{job="target-service-java"} > 150
+        for: 2m
+        labels: {severity: warning, team: platform, slo: saturation, service: target-service-java}
+        annotations:
+          summary: "WARNING: target-service-java live thread count elevated"
+          description: "jvm_threads_live_threads on target-service-java exceeds 150 — possible thread leak."
+
+      # JVM-specific: sustained GC pressure
+      - alert: JvmGcPressureWarning
+        expr: |
+          rate(jvm_gc_pause_seconds_sum{job="target-service-java"}[5m])
+          / clamp_min(rate(jvm_gc_pause_seconds_count{job="target-service-java"}[5m]), 1e-9) > 0.1
+        for: 2m
+        labels: {severity: warning, team: platform, slo: saturation, service: target-service-java}
+        annotations:
+          summary: "WARNING: target-service-java GC pressure"
+          description: "Mean JVM GC pause on target-service-java exceeds 100ms — heap under pressure."
+
+      # NOTE: no `up{job=target-service-java}==0` alert here on purpose — the
+      # scrape job ships in the shared prometheus.yml, and the demo service only
+      # runs behind the docker-compose.java-demo.yml overlay (never in prod), so
+      # a down-target alert would false-fire in prod. The metric-based alerts
+      # above simply have no data (and never fire) when the demo isn't running.
